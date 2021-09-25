@@ -26,7 +26,7 @@ module Main (B: Mirage_block.S) = struct
   let user_db disk user =
     let keyfile = String.concat "" [user; ".pub"] in
     Sshfs.file_buf disk keyfile >>= fun (key) ->
-    Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s`\n%!" user (Cstruct.to_string key));
+    Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s` (`%s`)\n%!" user keyfile (Cstruct.to_string key));
     let key = Rresult.R.get_ok (Awa.Wire.pubkey_of_openssh key) in
     let awa = Awa.Auth.make_user user [ key ] in
     Lwt.return [ awa ]
@@ -71,7 +71,7 @@ module Main (B: Mirage_block.S) = struct
     (*Lwt_unix.close fd*)
 
   let rec wait_connection priv_key listen_fd server_port disk =
-    Log.info (fun f -> f "Awa server waiting connections on port %d\n%!" server_port);
+    Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" server_port);
     Lwt_unix.(accept listen_fd) >>= fun (client_fd, saddr) ->
     let client_addr = match saddr with
       | Lwt_unix.ADDR_UNIX s -> s
