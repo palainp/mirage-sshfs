@@ -16,12 +16,14 @@
 
 open Lwt.Infix
 
-module Main (B: Mirage_block.S) = struct
+module Main (N: Mirage_net.S) (_: Mirage_time.S) (B: Mirage_block.S) = struct
 
   let log_src = Logs.Src.create "sshfs_server" ~doc:"Server for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   module Sshfs = Sshfs.Make(B)
+  module E = Ethernet.Make(N)
+
   
   let user_db disk user =
     let keyfile = String.concat "" [user; ".pub"] in
@@ -68,7 +70,6 @@ module Main (B: Mirage_block.S) = struct
     Awa_lwt.spawn_server server msgs fd (exec addr disk) >>= fun _t ->
     Log.info (fun f -> f "[%s] finished\n%!" addr);
     Lwt.return_unit
-    (*Lwt_unix.close fd*)
 
   let rec wait_connection priv_key listen_fd server_port disk =
     Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" server_port);
@@ -81,13 +82,16 @@ module Main (B: Mirage_block.S) = struct
     Lwt.ignore_result (serve priv_key client_fd client_addr disk);
     wait_connection priv_key listen_fd server_port disk
 
-  let start disk =
+  let start _ _ disk =
+    (* Load the disk and init crypto *)
     Sshfs.connect disk >>= fun disk ->
     Mirage_crypto_rng_lwt.initialize ();
     let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string "180586") (module Fortuna)) in
     let (ec_priv,_) = Mirage_crypto_ec.Ed25519.generate ~g () in
     let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in
+
     let server_port = Key_gen.port () in
+
     let listen_fd = Lwt_unix.(socket PF_INET SOCK_STREAM 0) in
     Lwt_unix.(setsockopt listen_fd SO_REUSEADDR true);
     Lwt_unix.(bind listen_fd (ADDR_INET (Unix.inet_addr_any, server_port)))

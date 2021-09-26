@@ -15,11 +15,11 @@ let img = block_of_file disk
 let main =
   foreign
     ~packages:[
-      (*package "cstruct";*)
-      package "cstruct-unix";
+      package "cstruct";
       package "awa-lwt";
       package "mirage-crypto-rng.lwt";
       package "fat-filesystem";
+      package "ethernet";
       package "io-page";
       package ~build:true "bos";
       package ~build:true "fpath";
@@ -28,6 +28,6 @@ let main =
       Key.abstract port;
       Key.abstract user;
     ]
-    "Unikernel.Main" (block @-> job)
+    "Unikernel.Main" (network @-> time @-> block @-> job)
 
-let () = register "mirage_sshfs" [ main $ img]
+let () = register "mirage_sshfs" [ main $ default_network $ default_time $ img]
