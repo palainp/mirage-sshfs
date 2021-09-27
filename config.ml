@@ -10,13 +10,12 @@ let port =
   let doc = Key.Arg.info ~doc:"The port number to listen for connections." ["port"] in
   Key.(create "port" Arg.(opt int 18022 doc))
 
-let img = block_of_file disk
+let img = Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file disk))
 
 let main =
   foreign
     ~packages:[
-      (*package "cstruct";*)
-      package "cstruct-unix";
+      package "cstruct";
       package "awa-lwt";
       package "mirage-crypto-rng.lwt";
       package "fat-filesystem";
