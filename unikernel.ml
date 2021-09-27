@@ -16,16 +16,18 @@
 
 open Lwt.Infix
 
-module Main (B: Mirage_block.S) = struct
+module Main (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) (B: Mirage_block.S) = struct
 
   let log_src = Logs.Src.create "sshfs_server" ~doc:"Server for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  module Sshfs = Sshfs.Make(B)
+  module F = S.TCPV4
+  module AWA_MIRAGE = Awa_mirage.Make(F)(M)
+  module SSHFS = Sshfs.Make(B)
   
   let user_db disk user =
     let keyfile = String.concat "" [user; ".pub"] in
-    Sshfs.file_buf disk keyfile >>= fun (key) ->
+    SSHFS.file_buf disk keyfile >>= fun (key) ->
     Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s` (`%s`)\n%!" user keyfile (Cstruct.to_string key));
     let key = Rresult.R.get_ok (Awa.Wire.pubkey_of_openssh key) in
     let awa = Awa.Auth.make_user user [ key ] in
@@ -36,7 +38,7 @@ module Main (B: Mirage_block.S) = struct
     if(Cstruct.length input < 5 (* or == 0 ? *)) then Lwt.return working_table
     else begin
       let len = Int32.to_int (Cstruct.BE.get_uint32 (Cstruct.sub input 0 4) 0) in
-      Sshfs.reply (Cstruct.sub input 4 len) sshout _ssherror
+      SSHFS.reply (Cstruct.sub input 4 len) sshout _ssherror
         working_table (* internal structure, list open handles and associated datas *)
         disk
         ()
@@ -58,41 +60,33 @@ module Main (B: Mirage_block.S) = struct
     ) >>= fun () ->
     Log.info (fun f -> f "[%s] execution of `%s` finished\n%!" addr cmd);
     Lwt.return_unit
-    (* XXX Awa_lwt must close the channel when exec returns ! *)
 
-  let serve priv_key fd addr disk =
+  let serve priv_key flow addr disk =
     Log.info (fun f -> f "[%s] connected\n%!" addr);
     let user = Key_gen.user () in
     user_db disk user >>= fun(users) ->
     let server, msgs = Awa.Server.make priv_key users in
-    Awa_lwt.spawn_server server msgs fd (exec addr disk) >>= fun _t ->
+    AWA_MIRAGE.spawn_server server msgs flow (exec addr disk) >>= fun _t ->
     Log.info (fun f -> f "[%s] finished\n%!" addr);
     Lwt.return_unit
-    (*Lwt_unix.close fd*)
 
-  let rec wait_connection priv_key listen_fd server_port disk =
-    Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" server_port);
-    Lwt_unix.(accept listen_fd) >>= fun (client_fd, saddr) ->
-    let client_addr = match saddr with
-      | Lwt_unix.ADDR_UNIX s -> s
-      | Lwt_unix.ADDR_INET (addr, port) ->
-        Printf.sprintf "%s:%d" (Unix.string_of_inet_addr addr) port
-    in
-    Lwt.ignore_result (serve priv_key client_fd client_addr disk);
-    wait_connection priv_key listen_fd server_port disk
+  let start _ stack disk =
+    SSHFS.connect disk >>= fun disk ->
 
-  let start disk =
-    Sshfs.connect disk >>= fun disk ->
     Mirage_crypto_rng_lwt.initialize ();
     let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string "180586") (module Fortuna)) in
     let (ec_priv,_) = Mirage_crypto_ec.Ed25519.generate ~g () in
     let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in
-    let server_port = Key_gen.port () in
-    let listen_fd = Lwt_unix.(socket PF_INET SOCK_STREAM 0) in
-    Lwt_unix.(setsockopt listen_fd SO_REUSEADDR true);
-    Lwt_unix.(bind listen_fd (ADDR_INET (Unix.inet_addr_any, server_port)))
-    >>= fun () ->
-    Lwt_unix.listen listen_fd 1;
-    wait_connection priv_key listen_fd server_port disk
+    
+    let port = Key_gen.port () in
+    S.listen_tcpv4 stack ~port (fun flow -> 
+        let dst, _ (*dst_port*) = S.TCPV4.dst flow in
+        let addr = Ipaddr.V4.to_string dst in
+        serve priv_key flow addr disk >>= fun () ->
+        S.TCPV4.close flow
+      );
+
+    Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" port);
+    S.listen stack
 
 end
