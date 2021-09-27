@@ -73,7 +73,6 @@ module Main (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) (B: Mirage_block.S) =
   let start _ stack disk =
     SSHFS.connect disk >>= fun disk ->
 
-    Mirage_crypto_rng_lwt.initialize ();
     let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string "180586") (module Fortuna)) in
     let (ec_priv,_) = Mirage_crypto_ec.Ed25519.generate ~g () in
     let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in

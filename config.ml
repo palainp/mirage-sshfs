@@ -15,7 +15,6 @@ let main =
     ~packages:[
       package "cstruct";
       package "awa-mirage";
-      package "mirage-crypto-rng.lwt";
       package "fat-filesystem";
       package "io-page";
       package "ethernet";
