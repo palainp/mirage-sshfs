@@ -16,6 +16,7 @@ let main =
       package "cstruct";
       package "awa-mirage";
       package "fat-filesystem";
+      package "ethernet";
       package "io-page";
       package "ethernet";
       package ~build:true "bos";
@@ -31,3 +32,4 @@ let stack = generic_stackv4 default_network
 let img = Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file disk))
 
 let () = register "mirage_sshfs" [ main $ default_monotonic_clock $ stack $ img]
+

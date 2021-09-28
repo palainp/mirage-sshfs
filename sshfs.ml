@@ -43,7 +43,7 @@ module Make (B: Mirage_block.S) = struct
     | SSH_FXF_EXCL
     | SSH_FXF_UNDEF
 
-  let sshfs_attrs_of_uint32 = function
+  let sshfs_attrs_of_int = function
     | 0x00000001 -> SSH_FXF_READ
     | 0x00000002 -> SSH_FXF_WRITE
     | 0x00000004 -> SSH_FXF_APPEND
@@ -51,6 +51,15 @@ module Make (B: Mirage_block.S) = struct
     | 0x00000010 -> SSH_FXF_TRUNC
     | 0x00000020 -> SSH_FXF_EXCL
     | _ -> SSH_FXF_UNDEF
+
+  let sshfs_attrs_to_int = function
+    | SSH_FXF_READ -> 0x00000001
+    | SSH_FXF_WRITE -> 0x00000002
+    | SSH_FXF_APPEND -> 0x00000004
+    | SSH_FXF_CREAT -> 0x00000008
+    | SSH_FXF_TRUNC -> 0x00000010
+    | SSH_FXF_EXCL -> 0x00000020
+    | SSH_FXF_UNDEF -> 0
 
   (*
 
@@ -84,7 +93,6 @@ module Make (B: Mirage_block.S) = struct
     | SSH_FX_OP_UNSUPPORTED -> 31l
 
   (*1 byte type of messages
-    | SSH_FXP_FSTAT               8
     | SSH_FXP_REALPATH           16
     | SSH_FXP_STAT               17
     | SSH_FXP_READLINK           19
@@ -104,6 +112,7 @@ module Make (B: Mirage_block.S) = struct
     | SSH_FXP_READ
     | SSH_FXP_WRITE
     | SSH_FXP_LSTAT
+    | SSH_FXP_FSTAT
     | SSH_FXP_SETSTAT
     | SSH_FXP_FSETSTAT
     | SSH_FXP_OPENDIR
@@ -127,6 +136,7 @@ module Make (B: Mirage_block.S) = struct
     | 5 -> SSH_FXP_READ
     | 6 -> SSH_FXP_WRITE
     | 7 -> SSH_FXP_LSTAT
+    | 8 -> SSH_FXP_FSTAT
     | 9 -> SSH_FXP_SETSTAT
     | 10 -> SSH_FXP_FSETSTAT
     | 11 -> SSH_FXP_OPENDIR
@@ -150,6 +160,7 @@ module Make (B: Mirage_block.S) = struct
     | SSH_FXP_READ -> 5
     | SSH_FXP_WRITE -> 6
     | SSH_FXP_LSTAT -> 7
+    | SSH_FXP_FSTAT -> 8
     | SSH_FXP_SETSTAT -> 9
     | SSH_FXP_FSETSTAT -> 10
     | SSH_FXP_OPENDIR -> 11
@@ -247,6 +258,36 @@ module Make (B: Mirage_block.S) = struct
     path_to_handle root path >>= fun (handle) ->
     Lwt.return (handle, SSH_FXP_HANDLE, payload_of_string handle)
 
+  let flush_file_if attrs root path =
+    if (attrs land (sshfs_attrs_to_int SSH_FXF_TRUNC))==(sshfs_attrs_to_int SSH_FXF_TRUNC) then begin 
+      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
+      FS.destroy root path >>*= fun() -> FS.create root path >>*= fun () -> Lwt.return_unit
+    end else
+      Lwt.return_unit
+
+  let create_file_if attrs root path =
+    if (attrs land (sshfs_attrs_to_int SSH_FXF_CREAT))==(sshfs_attrs_to_int SSH_FXF_CREAT) then begin
+      Log.debug (fun f -> f "[create_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
+      FS.create root path >>*= fun () -> Lwt.return_unit
+    end else
+      Lwt.return_unit
+
+  let touch_file_if attrs root path =
+    if ((attrs land (sshfs_attrs_to_int SSH_FXF_APPEND))==(sshfs_attrs_to_int SSH_FXF_APPEND)) then begin 
+      is_present root path >>= fun b -> if not(b) then begin
+        Log.debug (fun f -> f "[flush_file_if] SSH_FXF_APPEND `%s`\n%!" path);
+        FS.create root path >>*= fun () -> Lwt.return_unit
+      end else Lwt.return_unit
+    end else
+      Lwt.return_unit
+
+  let remove_if_present root path =
+    is_present root path >>= fun b -> if b then begin
+      Log.debug (fun f -> f "[remove_if_present] %s exists -> rm it\n%!" path);
+      FS.destroy root path >>*= fun () -> Lwt.return_unit
+    end else
+      Lwt.return_unit
+
   (* permissions:
    * p:4096, d:16384, -:32768
    * 256+128+64 : rwx for user
@@ -283,6 +324,12 @@ module Make (B: Mirage_block.S) = struct
       else
         Lwt.return (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
 
+  let permission_for_newfile =
+    let payload = Cstruct.concat [
+            uint32_to_cs 4l ; (* ~SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+            uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
+    Lwt.return (SSH_FXP_ATTRS, payload)
+
   let lsdir root path =
     FS.listdir root path >>*= fun res ->
     Lwt.return res
@@ -304,6 +351,15 @@ module Make (B: Mirage_block.S) = struct
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
         Log.debug (fun f -> f "[SSH_FXP_LSTAT %ld] for '%s'\n%!" id path);
         permission root path >>= fun (reply_type, payload) ->
+        sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
+        >>= fun () -> Lwt.return working_table
+
+      | SSH_FXP_FSTAT->
+        let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
+        let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
+        path_of_handle root handle >>= fun(path) ->
+        Log.debug (fun f -> f "[SSH_FXP_FSTAT %ld] for %s\n%!" id path);
+        permission_for_newfile >>= fun (reply_type, payload) ->
         sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
@@ -352,7 +408,7 @@ module Make (B: Mirage_block.S) = struct
             permission root dirname >>= fun (_, stats) ->
             let payload = Cstruct.concat [ uint32_to_cs 1l ; (* count the number of names returned *)
               payload_of_string head ; (* short-name *)
-              payload_of_string "1234567890123123456781234567812345678123456789012" ; (* long-name *)
+              payload_of_string "1234567890123123456781234567812345678123456789012" ; (* FIXME: long-name *)
               stats ] in
             sshout (to_client SSH_FXP_NAME (Cstruct.concat [ uint32_to_cs id ; payload ]) )
             >>= fun () -> begin Hashtbl.replace working_table handle (List.tl remaining_list) ; Lwt.return working_table end
@@ -361,12 +417,15 @@ module Make (B: Mirage_block.S) = struct
       | SSH_FXP_OPEN -> (* TODO: read pflags & attrs for file creation *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
-        let _ (*pflags*) = uint32_of_cs (Cstruct.sub data (path_length+4) 4) in
-        (* ATTRS         attrs *)
-        Log.debug (fun f -> f "[SSH_FXP_OPEN %ld] for '%s'\n%!" id path);
-        begin match (Hashtbl.find_opt working_table path) with
-        | None -> (* if the handle is not already opened -> open it and add content of this directory into the working table *)
-          reply_handle root path >>= fun (handle, reply_type, payload) ->
+        let _ (*pflags*) = uint32_of_cs (Cstruct.sub data (8+path_length) 4) in
+        let attrs = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+path_length+4) 4)) in
+        Log.debug (fun f -> f "[SSH_FXP_OPEN %ld] for '%s' attrs=%d\n%!" id path attrs);
+        reply_handle root path >>= fun (handle, reply_type, payload) ->
+        begin match (Hashtbl.find_opt working_table handle) with
+        | None -> (* if the handle is not already opened *)
+          flush_file_if attrs root path >>= fun () ->
+          create_file_if attrs root path >>= fun () ->
+          touch_file_if attrs root path >>= fun () ->
           sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
           >>= fun () -> begin Hashtbl.add working_table handle [] ; Lwt.return working_table end
         | _ -> (* if the handle is already opened -> error *)
@@ -422,18 +481,20 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
-      | SSH_FXP_RENAME -> (* TODO: check if file already exists *)
+      | SSH_FXP_RENAME ->
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
         let newpath_length = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+path_length) 4)) in
         let newpath = Cstruct.to_string (Cstruct.sub data (8+path_length+4) newpath_length) in
         Log.debug (fun f -> f "[SSH_FXP_RENAME %ld] for %s->%s\n%!" id path newpath);
+        remove_if_present root newpath >>= fun() ->
         (* FIXME: ocaml-fat does not have rename function :( *)
         FS.size root path >>*= fun(s) ->
         FS.read root path 0 (Int64.to_int s) >>*= fun(data) ->
         let data = Cstruct.concat data in
         FS.create root newpath >>*= fun () ->
         FS.write root newpath 0 data >>*= fun () ->
+        FS.destroy root path >>*= fun () ->
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
@@ -476,7 +537,7 @@ module Make (B: Mirage_block.S) = struct
           >>= fun () -> begin Hashtbl.remove working_table handle ; Lwt.return working_table end
         end
 
-      | SSH_FXP_WRITE-> (* TODO:  *)
+      | SSH_FXP_WRITE-> (* TODO: what to do with the end of the file if we were asked to write in the middle of the file *)
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
         let offset = uint64_of_cs (Cstruct.sub data (8+handle_length) 8) in
