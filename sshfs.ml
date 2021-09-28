@@ -29,6 +29,8 @@ module Make (B: Mirage_block.S) = struct
     | Error e -> fail "%a" FS.pp_write_error (e :> FS.write_error)
     | Ok x    -> f x
 
+  open Fat
+
   let connect disk =
     FS.connect disk
 
@@ -215,8 +217,6 @@ module Make (B: Mirage_block.S) = struct
         Lwt.return (current_dir, dirlisting)
       else
         Lwt.return ((String.concat "/" [current_dir; dirlisting]), last)
-
-  open Fat
 
   let file_buf root file =
     accessing_path file >>= fun (dirlisting, last) ->
