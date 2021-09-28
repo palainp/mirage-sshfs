@@ -26,10 +26,10 @@ let main =
       Key.abstract port;
       Key.abstract user;
     ]
-    "Unikernel.Main" (mclock @-> stackv4  @-> block @-> job)
+    "Unikernel.Main" (random @-> mclock @-> stackv4  @-> block @-> job)
 
 let stack = generic_stackv4 default_network
 let img = Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file disk))
 
-let () = register "mirage_sshfs" [ main $ default_monotonic_clock $ stack $ img]
+let () = register "mirage_sshfs" [ main $ default_random $ default_monotonic_clock $ stack $ img]
 
