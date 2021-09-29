@@ -267,7 +267,7 @@ module Make (B: Mirage_block.S) = struct
 
   let create_file_if attrs root path =
     if (attrs land (sshfs_attrs_to_int SSH_FXF_CREAT))==(sshfs_attrs_to_int SSH_FXF_CREAT) then begin
-      Log.debug (fun f -> f "[create_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
+      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" path);
       FS.create root path >>*= fun () -> Lwt.return_unit
     end else
       Lwt.return_unit
@@ -275,7 +275,7 @@ module Make (B: Mirage_block.S) = struct
   let touch_file_if attrs root path =
     if ((attrs land (sshfs_attrs_to_int SSH_FXF_APPEND))==(sshfs_attrs_to_int SSH_FXF_APPEND)) then begin 
       is_present root path >>= fun b -> if not(b) then begin
-        Log.debug (fun f -> f "[flush_file_if] SSH_FXF_APPEND `%s`\n%!" path);
+        Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" path);
         FS.create root path >>*= fun () -> Lwt.return_unit
       end else Lwt.return_unit
     end else
@@ -354,6 +354,7 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
+      (* 6.8 Retrieving File Attributes *)
       | SSH_FXP_FSTAT->
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
@@ -383,6 +384,7 @@ module Make (B: Mirage_block.S) = struct
           >>= fun () -> Lwt.return working_table
         end
 
+      (* 6.7 Scanning Directories *)
       | SSH_FXP_READDIR -> (* TODO: remove the ugly long-name constant... *)
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
@@ -394,13 +396,15 @@ module Make (B: Mirage_block.S) = struct
           >>= fun () -> Lwt.return working_table
         | remaining_list -> (* if the handle is already opened -> reply to the client or EOF *)
           let remaining_list = Option.get remaining_list in
-          if (List.length remaining_list == 0) then
+          if (List.length remaining_list == 0) then begin
+            Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s' no more content\n%!" id handle);
             let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_EOF) in
             sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
             >>= fun () -> Lwt.return working_table
-          else
+          end else begin
             let head = List.hd remaining_list in
             path_of_handle root handle >>= fun(path) ->
+            Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle path);
             let dirname = match path with
               | "/" -> head
               | _ -> String.concat "/" [ path; head]
@@ -412,8 +416,10 @@ module Make (B: Mirage_block.S) = struct
               stats ] in
             sshout (to_client SSH_FXP_NAME (Cstruct.concat [ uint32_to_cs id ; payload ]) )
             >>= fun () -> begin Hashtbl.replace working_table handle (List.tl remaining_list) ; Lwt.return working_table end
+          end
         end
 
+      (* 6.3 Opening, Creating, and Closing Files *)
       | SSH_FXP_OPEN -> (* TODO: read pflags & attrs for file creation *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
@@ -434,6 +440,7 @@ module Make (B: Mirage_block.S) = struct
           >>= fun () -> Lwt.return working_table
         end
 
+      (* 6.4 Reading and Writing *)
       | SSH_FXP_READ -> (* TODO: check for reading >4k files *)
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
@@ -455,6 +462,7 @@ module Make (B: Mirage_block.S) = struct
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
           >>= fun () -> Lwt.return working_table
 
+      (* 6.3 Opening, Creating, and Closing Files *)
       | SSH_FXP_CLOSE ->
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
@@ -470,6 +478,7 @@ module Make (B: Mirage_block.S) = struct
           >>= fun () -> begin Hashtbl.remove working_table handle ; Lwt.return working_table end
         end
 
+      (* 6.6 Creating and Deleting Directories *)
       | SSH_FXP_RMDIR (* TODO: check for the result & reply error when dir is not empty... *)
       | SSH_FXP_REMOVE -> (* TODO: check for the result *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
@@ -481,6 +490,7 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
+      (* 6.5 Removing and Renaming Files *)
       | SSH_FXP_RENAME ->
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
@@ -499,6 +509,7 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
+      (* 6.6 Creating and Deleting Directories *)
       | SSH_FXP_MKDIR-> (* TODO: check for the result *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
@@ -509,6 +520,7 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
+      (* 6.9 Setting File Attributes *)
       | SSH_FXP_SETSTAT-> (* TODO: ex: touch, for now fat 16 does not do much with this kind of informations *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
@@ -519,6 +531,7 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
+      (* 6.9 Setting File Attributes *)
       | SSH_FXP_FSETSTAT-> (* TODO: ex: touch, for now fat 16 does not do much with this kind of informations *)
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
@@ -537,6 +550,7 @@ module Make (B: Mirage_block.S) = struct
           >>= fun () -> begin Hashtbl.remove working_table handle ; Lwt.return working_table end
         end
 
+      (* 6.4 Reading and Writing *)
       | SSH_FXP_WRITE-> (* TODO: what to do with the end of the file if we were asked to write in the middle of the file *)
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
@@ -551,6 +565,7 @@ module Make (B: Mirage_block.S) = struct
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
+      (* Not implemented yet :) *)
       | _ ->
         Log.debug (fun f -> f "[UNKNOWN %ld]\n%!" id);
         Cstruct.hexdump message ;

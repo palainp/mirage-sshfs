@@ -38,7 +38,7 @@ file with the user `mirage` and the key is in
 `disk.img/mirage.pub`. The default values for port and
 username are `18022` and `mirage`.
 
-## Running Hvt sshfs VM
+## Running Hvt SSHFS VM
 ```
 mirage configure -t hvt && \
 make depend && \
@@ -52,7 +52,7 @@ Then you can run the unikernel with solo5:
 solo5-hvt --net:service=tap100 \
   --block:storage=disk.img \
   mirage_sshfs.hvt \
-  --port 22022
+  --port 22022 --user mirage
 ```
 
 ## Connecting to the unikernel
