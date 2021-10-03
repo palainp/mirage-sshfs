@@ -1,5 +1,11 @@
 # mirage-sshfs
 
+Warning: WIP, in order to compile and execute, you will have to:
+```
+opam pin awa-mirage git+https://github.com/palainp/awa-ssh#sshfs -y
+opam pin fat-filesystem git+https://github.com/palainp/ocaml-fat -y
+```
+
 [mirage-sshfs](https://github.com/palainp/mirage-sshfs) is an
 _ISC-licensed_ SSHFS server implementation in ocaml.
 
