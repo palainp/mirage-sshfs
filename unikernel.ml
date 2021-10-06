@@ -27,7 +27,7 @@ module Main (_: Mirage_random.S) (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) 
   
   let user_db disk user =
     let keyfile = String.concat "" [user; ".pub"] in
-    SSHFS.file_buf disk keyfile >>= fun (key) ->
+    SSHFS.file_buf disk keyfile >>= fun key ->
     Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s` (`%s`)\n%!" user keyfile (Cstruct.to_string key));
     let key = Rresult.R.get_ok (Awa.Wire.pubkey_of_openssh key) in
     let awa = Awa.Auth.make_user user [ key ] in
@@ -62,8 +62,8 @@ module Main (_: Mirage_random.S) (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) 
     Lwt.return_unit
 
   let serve priv_key flow addr disk =
-    Log.info (fun f -> f "[%s] connected\n%!" addr);
     let user = Key_gen.user () in
+    Log.info (fun f -> f "[%s] initiating connexion with user %s\n%!" addr user);
     user_db disk user >>= fun(users) ->
     let server, msgs = Awa.Server.make priv_key users in
     AWA_MIRAGE.spawn_server server msgs flow (exec addr disk) >>= fun _t ->

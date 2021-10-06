@@ -61,6 +61,47 @@ solo5-hvt --net:service=tap100 \
   --port 22022 --user mirage
 ```
 
+## Running Qubes SSHFS VM
+```
+mirage configure -t qubes && \
+make depend && \
+make
+```
+
+To create a VM using the new unikernel, you can run the following commands in `dom0`.
+Here `mirage-sshfs` stands for the name of your new VM, `dev_VM` for the name of the
+VM in which you compile your unikernel.
+
+You can look into qubes-test-mirage to upload your unikernel to `dom0`
+[qubes-test-mirage](https://github.com/talex5/qubes-test-mirage).
+
+```
+qvm-create \
+  --property kernel=mirage-sshfs \
+  --property kernelopts='' \
+  --property memory=32 \
+  --property maxmem=32 \
+  --property netvm=sys-firewall \
+  --property provides_network=False \
+  --property vcpus=1 \
+  --property virt_mode=pvh \
+  --label=gray \
+  --standalone \
+  mirage-sshfs
+
+qvm-features mirage-sshfs no-default-kernelopts 1
+qvm-run -p dev_VM 'cat /path/to/mirage-sshfs/disk.img' > /home/user/Desktop/disk.img
+qvm-volume import --no-resize mirage-sshfs:private /home/user/Desktop/disk.img
+```
+
+If you want to enable debug tracing, you can also run:
+```
+qvm-prefs -- mirage-sshfs kernelopts '-l "*:debug"'
+```
+
+And finally you will have to add rules in your connecting firewall VM to support
+communication between the unikernel_sshfs VM and your clients VMs.
+
 ## Connecting to the unikernel
 
 Once the server is running, you can mount the disk with the sshfs
