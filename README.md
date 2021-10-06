@@ -20,7 +20,7 @@ implementation. The following create a disk image and add a
 file in it, feel free to add any file you want (the pubkey must
 be present at the root of the filesystem and must be `username.pub`).
 ```
-ssh-keygen -t rsa -C mirage_sshfs -f mirage -N '' && \
+ssh-keygen -t ed25519 -C mirage_sshfs -f mirage -N '' && \
 chmod 600 mirage && \
 opam install fat-filesystem -y && \
 fat create disk.img && \
