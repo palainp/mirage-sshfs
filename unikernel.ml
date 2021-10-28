@@ -16,13 +16,13 @@
 
 open Lwt.Infix
 
-module Main (_: Mirage_random.S) (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) (B: Mirage_block.S) = struct
+module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) (B: Mirage_block.S) = struct
 
   let log_src = Logs.Src.create "sshfs_server" ~doc:"Server for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   module F = S.TCPV4
-  module AWA_MIRAGE = Awa_mirage.Make(F)(M)
+  module AWA_MIRAGE = Awa_mirage.Make(F)(T)(M)
   module SSHFS = Sshfs.Make(B)
   
   let user_db disk user =
@@ -70,7 +70,7 @@ module Main (_: Mirage_random.S) (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) 
     Log.info (fun f -> f "[%s] finished\n%!" addr);
     Lwt.return_unit
 
-  let start _ _ stack disk =
+  let start _ _ _ stack disk =
     SSHFS.connect disk >>= fun disk ->
 
     let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string "180586") (module Fortuna)) in
