@@ -18,7 +18,7 @@ let main =
       package "fat-filesystem";
       package "ethernet";
       package "io-page";
-      package "ethernet";
+      package ~min:"0.8.7" "fmt";
       package ~build:true "bos";
       package ~build:true "fpath";
     ]
