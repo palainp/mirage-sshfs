@@ -2,7 +2,7 @@
 
 Warning: WIP, in order to compile and execute, you will have to:
 ```
-opam pin awa git+https://github.com/palainp/awa-ssh#sshfs -y
+opam pin awa git+https://github.com/palainp/awa-ssh#add-sshfs-subsystem -y
 opam pin fat-filesystem git+https://github.com/palainp/ocaml-fat -y
 ```
 
