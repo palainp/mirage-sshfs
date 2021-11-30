@@ -255,34 +255,39 @@ module Make (B: Mirage_block.S) = struct
     path_to_handle root path >>= fun (handle) ->
     Lwt.return (handle, SSH_FXP_HANDLE, payload_of_string handle)
 
-  let flush_file_if pflags root path =
-    if (pflags land (sshfs_pflags_to_int SSH_FXF_TRUNC))==(sshfs_pflags_to_int SSH_FXF_TRUNC) then begin 
-      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
-      FS.destroy root path >>*= fun () -> FS.create root path >>*= fun () -> Lwt.return_unit
-    end else
-      Lwt.return_unit
-
-  let create_file_if pflags root path =
-    if (pflags land (sshfs_pflags_to_int SSH_FXF_CREAT))==(sshfs_pflags_to_int SSH_FXF_CREAT) then begin
-      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" path);
-      FS.create root path >>*= fun () -> Lwt.return_unit
-    end else
-      Lwt.return_unit
-
-  let touch_file_if pflags root path =
-    if ((pflags land (sshfs_pflags_to_int SSH_FXF_APPEND))==(sshfs_pflags_to_int SSH_FXF_APPEND)) then begin 
-      is_present root path >>= fun b -> if not(b) then begin
-        Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" path);
-        FS.create root path >>*= fun () -> Lwt.return_unit
-      end else Lwt.return_unit
-    end else Lwt.return_unit
-
   let remove_if_present root path =
     is_present root path >>= fun b -> if b then begin
       Log.debug (fun f -> f "[remove_if_present] %s exists -> rm it\n%!" path);
       FS.destroy root path >>*= fun () -> Lwt.return_unit
     end else
       Lwt.return_unit
+
+  let create_if_absent root path =
+    is_present root path >>= fun b -> if not b then begin
+      Log.debug (fun f -> f "[create_if_absent] %s does not exists -> touch it\n%!" path);
+      FS.create root path >>*= fun () -> Lwt.return_unit
+    end else
+      Lwt.return_unit
+
+  let flush_file_if pflags root path =
+    if (pflags land (sshfs_pflags_to_int SSH_FXF_TRUNC))==(sshfs_pflags_to_int SSH_FXF_TRUNC) then begin 
+      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
+      remove_if_present root path >>= fun () -> create_if_absent root path
+    end else
+      Lwt.return_unit
+
+  let create_file_if pflags root path =
+    if (pflags land (sshfs_pflags_to_int SSH_FXF_CREAT))==(sshfs_pflags_to_int SSH_FXF_CREAT) then begin
+      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" path);
+      create_if_absent root path
+    end else
+      Lwt.return_unit
+
+  let touch_file_if pflags root path =
+    if ((pflags land (sshfs_pflags_to_int SSH_FXF_APPEND))==(sshfs_pflags_to_int SSH_FXF_APPEND)) then begin 
+      Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" path);
+      create_if_absent root path
+    end else Lwt.return_unit
 
   (* permissions:
    * p:4096, d:16384, -:32768
