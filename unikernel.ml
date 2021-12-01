@@ -33,28 +33,37 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     let awa = Awa.Auth.make_user user [ key ] in
     Lwt.return [ awa ]
 
-  (* here we can have multiple messages in the queue *)
-  let rec consume_messages input sshout _ssherror working_table disk () =
-    if(Cstruct.length input < 5 (* or == 0 ? *)) then Lwt.return working_table
-    else begin
-      let len = Int32.to_int (Cstruct.BE.get_uint32 (Cstruct.sub input 0 4) 0) in
-      SSHFS.reply (Cstruct.sub input 4 len) sshout _ssherror
-        working_table (* internal structure, list open handles and associated datas *)
-        disk
-        ()
-      >>= fun new_table -> consume_messages (Cstruct.sub input (len+4) ((Cstruct.length input)-len-4)) sshout _ssherror new_table disk ()
-    end
-
-  let rec sshfs_communication sshin sshout _ssherror working_table disk () =
+  let rec sshfs_communication sshin sshout _ssherror prev_data working_table disk () =
+    (* here we can have multiple messages in the queue *)
+    let rec consume_messages input sshout _ssherror working_table disk () =
+      (* if the message is empty *)
+      if Cstruct.length input == 0 then Lwt.return (Cstruct.empty, working_table)
+      else begin
+        let len = Int32.to_int (Cstruct.BE.get_uint32 (Cstruct.sub input 0 4) 0) in
+        (* if the message is too long for one sshin message *)
+        if Cstruct.length input < len+4 then
+          Lwt.return (input, working_table)
+        else begin
+        (* in the other cases we can deal with it *)
+          let data = Cstruct.sub input 4 len in
+          SSHFS.reply data sshout _ssherror
+            working_table (* internal structure, list open handles and associated datas *)
+            disk
+            ()
+          >>= fun new_table ->
+          consume_messages (Cstruct.sub input (len+4) ((Cstruct.length input)-len-4)) sshout _ssherror new_table disk ()
+        end
+      end
+    in
     sshin () >>= function
     | `Eof -> Lwt.return_unit
-    | `Data input -> consume_messages input sshout _ssherror working_table disk ()
-    >>= fun new_table -> sshfs_communication sshin sshout _ssherror new_table disk ()
+    | `Data input -> consume_messages (Cstruct.append prev_data input) sshout _ssherror  working_table disk ()
+    >>= fun (remaining_data, new_table) -> sshfs_communication sshin sshout _ssherror remaining_data new_table disk ()
 
   let exec addr disk cmd sshin sshout _ssherror =
     Log.info (fun f -> f "[%s] executing `%s`\n%!" addr cmd);
     (match cmd with
-      | "sftp" -> sshfs_communication sshin sshout _ssherror (Hashtbl.create 10) disk ()
+      | "sftp" -> sshfs_communication sshin sshout _ssherror Cstruct.empty (Hashtbl.create 10) disk ()
       | _ -> Log.warn (fun f -> f "*** Subsystem %s is not implemented\n%!" cmd);
           Lwt.return_unit
     ) >>= fun () ->

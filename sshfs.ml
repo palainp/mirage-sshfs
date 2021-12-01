@@ -558,7 +558,7 @@ module Make (B: Mirage_block.S) = struct
         let newdata_length = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+handle_length+8) 4)) in
         let newdata = Cstruct.sub data (8+handle_length+8+4) newdata_length in
         path_of_handle root handle >>= fun(path) ->
-        Log.debug (fun f -> f "[SSH_FXP_WRITE %ld] '%s' @%Ld (%d) %s\n%!" id path offset newdata_length (Cstruct.to_string newdata));
+        Log.debug (fun f -> f "[SSH_FXP_WRITE %ld] '%s' @%Ld (%d) %s\n%!" id path offset newdata_length (Cstruct.to_string (Cstruct.sub newdata 0 20)));
         (* FIXME: we always reply with status ok... *)
         FS.write root path (Int64.to_int offset) newdata >>*= fun () ->
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
