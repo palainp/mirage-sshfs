@@ -87,7 +87,7 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in
     
     let port = Key_gen.port () in
-    S.listen_tcpv4 stack ~port (fun flow -> 
+    S.TCPV4.listen (S.tcpv4 stack) ~port (fun flow ->
         let dst, _ (*dst_port*) = S.TCPV4.dst flow in
         let addr = Ipaddr.V4.to_string dst in
         serve priv_key flow addr disk >>= fun () ->
