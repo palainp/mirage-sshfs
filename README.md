@@ -3,6 +3,7 @@
 Warning: WIP, in order to compile and execute, you will have to:
 ```
 opam pin awa git+https://github.com/palainp/awa-ssh#add-sshfs-subsystem -y
+opam pin awa-mirage git+https://github.com/palainp/awa-ssh#add-sshfs-subsystem -y
 opam pin fat-filesystem git+https://github.com/palainp/ocaml-fat -y
 ```
 
@@ -36,7 +37,7 @@ the first public key to connect against.
 mirage configure -t unix && \
 make depend && \
 make && \
-mirage_sshfs --port 22022 --user mirage
+mirage_sshfs --port 22022 --user mirage --seed 180586
 ```
 
 The server gives access to the content of the `disk.img`
@@ -58,7 +59,7 @@ Then you can run the unikernel with solo5:
 solo5-hvt --net:service=tap100 \
   --block:storage=disk.img \
   mirage_sshfs.hvt \
-  --port 22022 --user mirage
+  --port 22022 --user mirage --seed 180586
 ```
 
 ## Running Qubes SSHFS VM
@@ -96,7 +97,7 @@ qvm-volume import --no-resize mirage-sshfs:private /home/user/Desktop/disk.img
 
 If you want to enable debug tracing, you can also run:
 ```
-qvm-prefs -- mirage-sshfs kernelopts '-l "*:debug"'
+qvm-prefs -- mirage-sshfs kernelopts '-l "*:debug" --seed 180586'
 ```
 
 And finally you will have to add rules in your connecting firewall VM to support

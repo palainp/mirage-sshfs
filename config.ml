@@ -10,6 +10,10 @@ let port =
   let doc = Key.Arg.info ~doc:"The port number to listen for connections." ["port"] in
   Key.(create "port" Arg.(opt int 18022 doc))
 
+let seed =
+  let doc = Key.Arg.info ~doc:"The seed for the private/public key." ["seed"] in
+  Key.(create "seed" Arg.(required string doc))
+
 let main =
   foreign
     ~packages:[
@@ -26,6 +30,7 @@ let main =
     ~keys:[
       Key.abstract port;
       Key.abstract user;
+      Key.abstract seed;
     ]
     "Unikernel.Main" (random @-> time @-> mclock @-> stackv4  @-> block @-> job)
 
