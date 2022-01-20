@@ -18,7 +18,7 @@ let main =
   foreign
     ~packages:[
       package "cstruct";
-      package "awa-mirage";
+      package ~min:"0.1.0" "awa-mirage";
       package "fat-filesystem";
       package "ethernet";
       package "io-page";
