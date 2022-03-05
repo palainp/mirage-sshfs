@@ -16,12 +16,12 @@
 
 open Lwt.Infix
 
-module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (S: Mirage_stack.V4) (B: Mirage_block.S) = struct
+module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (S: Tcpip.Stack.V4V6) (B: Mirage_block.S) = struct
 
   let log_src = Logs.Src.create "sshfs_server" ~doc:"Server for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  module F = S.TCPV4
+  module F = S.TCP
   module AWA_MIRAGE = Awa_mirage.Make(F)(T)(M)
   module SSHFS = Sshfs.Make(B)
   
@@ -87,11 +87,11 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in
     
     let port = Key_gen.port () in
-    S.TCPV4.listen (S.tcpv4 stack) ~port (fun flow ->
-        let dst, _ (*dst_port*) = S.TCPV4.dst flow in
-        let addr = Ipaddr.V4.to_string dst in
+    S.TCP.listen (S.tcp stack) ~port (fun flow ->
+        let dst, _ (*dst_port*) = S.TCP.dst flow in
+        let addr = Ipaddr.to_string dst in
         serve priv_key flow addr disk >>= fun () ->
-        S.TCPV4.close flow
+        S.TCP.close flow
       );
 
     Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" port);

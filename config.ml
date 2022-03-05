@@ -1,7 +1,5 @@
 open Mirage
 
-let disk = "disk.img"
-
 let user =
   let doc = Key.Arg.info ~doc:"The username to connect with." ["user"] in
   Key.(create "user" Arg.(opt string "mirage" doc))
@@ -17,7 +15,7 @@ let seed =
 let main =
   foreign
     ~packages:[
-      package "cstruct";
+      package ~min:"6.0.0" "cstruct";
       package ~min:"0.1.0" "awa-mirage";
       package "fat-filesystem";
       package "ethernet";
@@ -28,14 +26,14 @@ let main =
       package ~build:true "fpath";
     ]
     ~keys:[
-      Key.abstract port;
-      Key.abstract user;
-      Key.abstract seed;
+      Key.v port;
+      Key.v user;
+      Key.v seed;
     ]
-    "Unikernel.Main" (random @-> time @-> mclock @-> stackv4  @-> block @-> job)
+    "Unikernel.Main" (random @-> time @-> mclock @-> stackv4v6 @-> block @-> job)
 
-let stack = generic_stackv4 default_network
-let img = Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file disk))
+let stack = generic_stackv4v6 default_network
+let img = Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file "disk.img"))
 
 let () = register "mirage_sshfs" [ main $ default_random $ default_time $ default_monotonic_clock $ stack $ img]
 

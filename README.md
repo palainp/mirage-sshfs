@@ -19,11 +19,11 @@ implementation. The following create a disk image and add a
 file in it, feel free to add any file you want (the pubkey must
 be present at the root of the filesystem and must be `username.pub`).
 ```
-ssh-keygen -t ed25519 -C mirage_sshfs -f mirage -N '' && \
-chmod 600 mirage && \
+ssh-keygen -t ed25519 -C mirage_sshfs -f username -N '' && \
+chmod 600 username && \
 opam install fat-filesystem -y && \
 fat create disk.img && \
-fat add disk.img mirage.pub
+fat add disk.img username.pub
 ```
 
 Any kind of filesystem should be ok to use as it will be seen on the
@@ -35,12 +35,12 @@ the first public key to connect against.
 mirage configure -t unix && \
 make depend && \
 make && \
-mirage_sshfs --port 22022 --user mirage --seed 180586
+mirage_sshfs --port 22022 --user username --seed 111213
 ```
 
 The server gives access to the content of the `disk.img`
-file with the user `mirage` and the key is in
-`disk.img/mirage.pub`. The default values for port and
+file with the user `username` and the key is in
+`disk.img/username.pub`. The default values for port and
 username are `18022` and `mirage`.
 
 ## Running Hvt SSHFS VM
@@ -57,7 +57,7 @@ Then you can run the unikernel with solo5:
 solo5-hvt --net:service=tap100 \
   --block:storage=disk.img \
   mirage_sshfs.hvt \
-  --port 22022 --user mirage --seed 180586
+  --port 22022 --user username --seed 111213
 ```
 
 ## Running Qubes SSHFS VM
@@ -90,12 +90,13 @@ qvm-create \
 
 qvm-features mirage-sshfs no-default-kernelopts 1
 qvm-run -p dev_VM 'cat /path/to/mirage-sshfs/disk.img' > /home/user/Desktop/disk.img
-qvm-volume import --no-resize mirage-sshfs:private /home/user/Desktop/disk.img
+qvm-volume import mirage-sshfs:private /home/user/Desktop/disk.img
+qvm-prefs -- mirage-sshfs kernelopts '--seed 111213'
 ```
 
 If you want to enable debug tracing, you can also run:
 ```
-qvm-prefs -- mirage-sshfs kernelopts '-l "*:debug" --seed 180586'
+qvm-prefs -- mirage-sshfs kernelopts '-l "*:debug" --seed 111213'
 ```
 
 And finally you will have to add rules in your connecting firewall VM to support
@@ -106,10 +107,10 @@ communication between the unikernel_sshfs VM and your clients VMs.
 Once the server is running, you can mount the disk with the sshfs
 command:
 ```
-sshfs mirage@hostserver:/ \
+sshfs username@hostserver:/ \
   /path/mount/ \
   -p 22022 \
-  -o IdentityFile=/absolute/path/to/mirage && \
+  -o IdentityFile=/absolute/path/to/username && \
 ls -l /path/mount/ && \
-cat /path/mount/mirage.pub
+cat /path/mount/username.pub
 ```
