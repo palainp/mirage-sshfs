@@ -12,11 +12,16 @@ let seed =
   let doc = Key.Arg.info ~doc:"The seed for the private/public key." ["seed"] in
   Key.(create "seed" Arg.(required string doc))
 
+let blockkey =
+  let doc = Key.Arg.info ~doc:"The key for the reading/writing with the block device." ["blockkey"] in
+  Key.(create "blockkey" Arg.(required string doc))
+
 let main =
   foreign
     ~packages:[
       package ~min:"6.0.0" "cstruct";
       package ~min:"0.1.0" "awa-mirage";
+      package "mirage-block-ccm";
       package "fat-filesystem";
       package "ethernet";
       package "io-page";
