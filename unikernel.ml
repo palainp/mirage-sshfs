@@ -22,7 +22,6 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   module F = S.TCP
-  module CCM = Block_ccm.Make(B)
   module AWA_MIRAGE = Awa_mirage.Make(F)(T)(M)
   module SSHFS = Sshfs.Make(B)
   
@@ -80,11 +79,9 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     Log.info (fun f -> f "[%s] finished\n%!" addr);
     Lwt.return_unit
 
-  let start _random _time _mclock stack img =
+  let start _random _time _mclock stack disk =
     let blockkey = Key_gen.blockkey () in
-    CCM.connect ~key:blockkey img >>= fun disk ->
-
-    SSHFS.connect disk >>= fun disk ->
+    SSHFS.connect disk blockkey >>= fun disk ->
 
     let seed = Key_gen.seed () in
     let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string seed) (module Fortuna)) in

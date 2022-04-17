@@ -21,7 +21,8 @@ module Make (B: Mirage_block.S) = struct
   let log_src = Logs.Src.create "sshfs_protocol" ~doc:"Protocol dealer for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  module FS = Fat.Make(B)
+  module CCM = Block_ccm.Make(B)
+  module FS = Fat.Make(CCM)
 
   let fail fmt = Fmt.kstr Lwt.fail_with fmt
 
@@ -31,7 +32,8 @@ module Make (B: Mirage_block.S) = struct
 
   open Fat
 
-  let connect disk =
+  let connect disk blockkey =
+    CCM.connect ~key:(Cstruct.of_hex blockkey) disk >>= fun disk ->
     FS.connect disk
 
   type sshfs_pflags =
