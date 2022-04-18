@@ -48,7 +48,7 @@ in the following commands and use the encrypted image file.
 mirage configure -t unix && \
 make depend && \
 make && \
-mirage_sshfs --port 22022 --user username --seed 111213
+./dist/mirage_sshfs --port 22022 --user username --seed 111213
 ```
 
 The server gives access to the content of the `disk.img`
@@ -69,7 +69,7 @@ Then you can run the unikernel with solo5:
 ```
 solo5-hvt --net:service=tap100 \
   --block:storage=disk.img \
-  mirage_sshfs.hvt \
+  ./dist/mirage_sshfs.hvt \
   --port 22022 --user username --seed 111213
 ```
 
