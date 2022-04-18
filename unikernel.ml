@@ -79,8 +79,10 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     Log.info (fun f -> f "[%s] finished\n%!" addr);
     Lwt.return_unit
 
-  let start _ _ _ stack disk =
-    SSHFS.connect disk >>= fun disk ->
+  let start _random _time _mclock stack disk =
+    let blockkey = Key_gen.blockkey () in
+    SSHFS.connect disk blockkey >>= fun disk ->
+
     let seed = Key_gen.seed () in
     let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string seed) (module Fortuna)) in
     let (ec_priv,_) = Mirage_crypto_ec.Ed25519.generate ~g () in

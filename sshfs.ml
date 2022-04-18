@@ -21,7 +21,8 @@ module Make (B: Mirage_block.S) = struct
   let log_src = Logs.Src.create "sshfs_protocol" ~doc:"Protocol dealer for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  module FS = Fat.Make(B)
+  module CCM = Block_ccm.Make(B)
+  module FS = Fat.Make(CCM)
 
   let fail fmt = Fmt.kstr Lwt.fail_with fmt
 
@@ -29,9 +30,8 @@ module Make (B: Mirage_block.S) = struct
     | Error e -> fail "%a" FS.pp_write_error (e :> FS.write_error)
     | Ok x    -> f x
 
-  open Fat
-
-  let connect disk =
+  let connect disk blockkey =
+    CCM.connect ~key:(Cstruct.of_hex blockkey) disk >>= fun disk ->
     FS.connect disk
 
   type sshfs_pflags =
@@ -339,6 +339,7 @@ module Make (B: Mirage_block.S) = struct
   let reply message sshout _ssherror working_table root () =
     let request_type, data = from_client message in
     let id = uint32_of_cs (Cstruct.sub data 0 4) in (* request-id *)
+    Log.debug (fun f -> f "[%ld received: raw type is %d]\n%!" id (sshfs_packtype_to_uint8 request_type));
     begin match request_type with
       (* 4. Protocol Initialization *)
       | SSH_FXP_INIT -> 
@@ -558,7 +559,7 @@ module Make (B: Mirage_block.S) = struct
         let newdata_length = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+handle_length+8) 4)) in
         let newdata = Cstruct.sub data (8+handle_length+8+4) newdata_length in
         path_of_handle root handle >>= fun(path) ->
-        Log.debug (fun f -> f "[SSH_FXP_WRITE %ld] '%s' @%Ld (%d) %s\n%!" id path offset newdata_length (Cstruct.to_string (Cstruct.sub newdata 0 20)));
+        Log.debug (fun f -> f "[SSH_FXP_WRITE %ld] '%s' @%Ld (%d)\n%!" id path offset newdata_length);
         (* FIXME: we always reply with status ok... *)
         FS.write root path (Int64.to_int offset) newdata >>*= fun () ->
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in

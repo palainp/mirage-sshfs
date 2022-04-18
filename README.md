@@ -30,6 +30,19 @@ Any kind of filesystem should be ok to use as it will be seen on the
 client side via the sshfs protocol. We just have to be able to add
 the first public key to connect against.
 
+## Filesystem encryption layer
+If you want to use an enryption layer under the filesystem's structure,
+this unikernel uses the AES-CCM encrypted `mirage-block-ccm` storage.
+You may want to convert an non-encrypted image (as the one previously
+created) to an encrypted one with the following:
+```
+opam install mirage-block-ccm -y && \
+ccmblock enc --in=disk.img --out=encrypted.img --key=1234567890ABCDEF1234567890ABCDEF
+```
+
+In this case, you must add the `--blockkey 1234567890ABCDEF1234567890ABCDEF`
+in the following commands and use the encrypted image file.
+
 ## Running Unix "chrooted" SSHFS
 ```
 mirage configure -t unix && \
