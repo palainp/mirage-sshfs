@@ -32,7 +32,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
   let connect disk blockkey =
     CCM.connect ~key:(Cstruct.of_hex blockkey) disk >>= fun disk ->
-    FS.connect ~program_block_size:16 ~block_size:512 disk
+    FS.connect ~program_block_size:16 ~block_size:4096 disk
 
   type sshfs_pflags =
     | SSH_FXF_READ
@@ -212,13 +212,14 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     let dat = Cstruct.sub msg 1 ((Cstruct.length msg) -1) in
     typ, dat
 
-  let file_buf root file =
-    FS.get root file >|= function
+  let get_file_data root filename =
+    let filekey = Mirage_kv.Key.v filename in
+    FS.get root filekey >|= function
     | Error _ ->
 (*      Log.warn (fun f -> f "*** file %s not found\n%!" file);*)
-        Lwt.return (Cstruct.create 0)
+        Cstruct.create 0
     | Ok content ->
-        Lwt.return (Cstruct.of_string content)
+        Cstruct.of_string content
 
   let is_present root path =
     FS.exists root path >|= function
@@ -437,7 +438,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let s = 10L in (* !!FIXME!! size is hardcoded *)
         if offset <= s then
           let pathkey = Mirage_kv.Key.v path in
-          FS.get root pathkey >|= function
+          FS.get root pathkey >>= function
           | Error _ -> Lwt.return working_table
           | Ok data ->
               let data = Cstruct.of_string data in
@@ -472,7 +473,8 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       | SSH_FXP_REMOVE -> (* TODO: check for the result *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
-        FS.destroy root path >>*= fun () ->
+        let pathkey = Mirage_kv.Key.v path in
+        FS.remove root pathkey >>*= fun () ->
         Log.debug (fun f -> f "[SSH_FXP_REMOVE %ld] for %s\n%!" id path);
         (* FIXME: we always reply with status ok... *)
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
@@ -486,23 +488,27 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let newpath_length = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+path_length) 4)) in
         let newpath = Cstruct.to_string (Cstruct.sub data (8+path_length+4) newpath_length) in
         Log.debug (fun f -> f "[SSH_FXP_RENAME %ld] for %s->%s\n%!" id path newpath);
-        remove_if_present root newpath >>= fun() ->
-        (* FIXME: ocaml-fat does not have rename function :( *)
-        FS.size root path >>*= fun s ->
-        FS.read root path 0 (Int64.to_int s) >>*= fun data ->
-        let data = Cstruct.concat data in
-        FS.create root newpath >>*= fun () ->
-        FS.write root newpath 0 data >>*= fun () ->
-        FS.destroy root path >>*= fun () ->
-        let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
-        sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
-        >>= fun () -> Lwt.return working_table
+        let pathkey = Mirage_kv.Key.v path in
+        let newpathkey = Mirage_kv.Key.v newpath in
+        remove_if_present root newpathkey >>= fun() ->
+        (* FIXME: Mirage_kv does not have rename function :( *)
+        FS.get root pathkey >>= begin function
+        | Error _ -> Lwt.return working_table
+        | Ok data ->
+            FS.set root newpathkey data >>*= fun () ->
+            FS.remove root pathkey >>*= fun () ->
+            let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
+            sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
+            >>= fun () -> Lwt.return working_table
+        end
 
       (* 6.6 Creating and Deleting Directories *)
       | SSH_FXP_MKDIR-> (* TODO: check for the result *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
-        FS.mkdir root path >>*= fun () ->
+        (* it seems that we cannot create empty directory, so I try to add a dummy .empty file *)
+        let dummykey = Mirage_kv.Key.v (String.concat "/" [path; ".empty"]) in
+        FS.set root dummykey "" >>*= fun () ->
         Log.debug (fun f -> f "[SSH_FXP_MKDIR %ld] for %s\n%!" id path);
         (* FIXME: we always reply with status ok... *)
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
@@ -549,10 +555,18 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         path_of_handle root handle >>= fun(path) ->
         Log.debug (fun f -> f "[SSH_FXP_WRITE %ld] '%s' @%Ld (%d)\n%!" id path offset newdata_length);
         (* FIXME: we always reply with status ok... *)
-        FS.write root path (Int64.to_int offset) newdata >>*= fun () ->
-        let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
-        sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
-        >>= fun () -> Lwt.return working_table
+        let pathkey = Mirage_kv.Key.v path in
+        FS.get root pathkey >>= begin function
+        | Error _ -> Lwt.return working_table
+        | Ok data ->
+            let data = Cstruct.of_string data in
+            let before = Cstruct.sub data 0 ((Int64.to_int offset)-1) in
+            let newdata = Cstruct.concat [before; newdata] in
+            FS.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
+            let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
+            sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
+            >>= fun () -> Lwt.return working_table
+        end
 
       (* Not implemented yet :) *)
       | _ ->
