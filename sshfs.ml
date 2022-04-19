@@ -213,12 +213,12 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     typ, dat
 
   let get_file_data root filename =
-    let filekey = Mirage_kv.Key.v filename in
-    FS.get root filekey >|= function
-    | Error _ ->
-(*      Log.warn (fun f -> f "*** file %s not found\n%!" file);*)
+    FS.get root @@ Mirage_kv.Key.v filename >|= function
+    | Error e ->
+        Log.warn (fun f -> f "*** accessing file %s with erro %a\n%!" filename FS.pp_error e);
         Cstruct.create 0
     | Ok content ->
+        Log.debug (fun f -> f "*** file %s have content : '%s'\n%!" filename content);
         Cstruct.of_string content
 
   let is_present root path =
@@ -235,7 +235,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     Lwt.return path
 
   let reply_handle root path =
-    path_to_handle root path >>= fun (handle) ->
+    path_to_handle root path >>= fun handle ->
     Lwt.return (handle, SSH_FXP_HANDLE, payload_of_string handle)
 
   let remove_if_present root path =
@@ -336,7 +336,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       | SSH_FXP_FSTAT->
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
-        path_of_handle root handle >>= fun(path) ->
+        path_of_handle root handle >>= fun path ->
         Log.debug (fun f -> f "[SSH_FXP_FSTAT %ld] for %s\n%!" id path);
         permission_for_newfile >>= fun (reply_type, payload) ->
         sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
@@ -347,6 +347,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
         Log.debug (fun f -> f "[SSH_FXP_OPENDIR %ld] for '%s'\n%!" id path);
+
         begin match (Hashtbl.find_opt working_table path) with
         | None -> (* if the handle is not already opened -> open it and add content of this directory into the working table *)
           reply_handle root path >>= fun (handle, reply_type, payload) ->
@@ -354,9 +355,10 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
           >>= fun () -> begin
             let pathkey = Mirage_kv.Key.v path in
-            lsdir root pathkey >>= fun(content_list) ->
+            lsdir root pathkey >>= fun content_list ->
             Hashtbl.add working_table handle content_list ; Lwt.return working_table
           end
+
         | _ -> (* if the handle is already opened -> error *)
           let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OP_UNSUPPORTED) in
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
@@ -387,15 +389,15 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           | head :: tail ->
             (* if we still have something to give *)
             let headstr = match head with 
-            | (str,_) -> str
+            | (str, _) -> str
             in
-            path_of_handle root handle >>= fun(path) ->
+            path_of_handle root handle >>= fun path ->
             let name = match path with
               | "/" -> headstr  (* for /  we just give the file name *)
               | _ -> String.concat "/" [ path; headstr ] (* for not / we give the full pathname *)
             in
             Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle name);
-            permission root (Mirage_kv.Key.v name) >>= fun (_, stats) ->
+            permission root @@ Mirage_kv.Key.v name >>= fun (_, stats) ->
             let payload = Cstruct.concat [ uint32_to_cs 1l ; (* count the number of names returned *)
               payload_of_string headstr ; (* short-name *)
               payload_of_string "1234567890123123456781234567812345678123456789012" ; (* FIXME: long-name *)
@@ -412,6 +414,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let pflags = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+path_length) 4)) in
         let attrs = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+path_length+4) 4)) in
         Log.debug (fun f -> f "[SSH_FXP_OPEN %ld] for '%s' pflags=%d attrs=%d\n%!" id path pflags attrs);
+
         reply_handle root path >>= fun (handle, reply_type, payload) ->
         begin match (Hashtbl.find_opt working_table handle) with
         | None -> (* if the handle is not already opened *)
@@ -421,6 +424,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           touch_file_if pflags root pathkey >>= fun () ->
           sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
           >>= fun () -> begin Hashtbl.add working_table handle [] ; Lwt.return working_table end
+
         | _ -> (* if the handle is already opened -> error *)
           let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OP_UNSUPPORTED) in
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
@@ -433,12 +437,12 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
         let offset = uint64_of_cs (Cstruct.sub data (8+handle_length) 8) in
         let len = uint32_of_cs (Cstruct.sub data (8+handle_length+8) 4) in
-        path_of_handle root handle >>= fun(path) ->
+
+        path_of_handle root handle >>= fun path ->
         Log.debug (fun f -> f "[SSH_FXP_READ %ld] for '%s' @%Ld (%ld)\n%!" id path offset len);
         let s = 10L in (* !!FIXME!! size is hardcoded *)
         if offset <= s then
-          let pathkey = Mirage_kv.Key.v path in
-          FS.get root pathkey >>= function
+          FS.get root @@ Mirage_kv.Key.v path  >>= function
           | Error _ -> Lwt.return working_table
           | Ok data ->
               let data = Cstruct.of_string data in
@@ -457,6 +461,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
         Log.debug (fun f -> f "[SSH_FXP_CLOSE %ld] for %s\n%!" id handle);
+
         begin match (Hashtbl.find_opt working_table handle) with
         | None -> (* if the handle is not already opened -> error *)
           let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_INVALID_HANDLE) in
@@ -473,9 +478,9 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       | SSH_FXP_REMOVE -> (* TODO: check for the result *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
-        let pathkey = Mirage_kv.Key.v path in
-        FS.remove root pathkey >>*= fun () ->
         Log.debug (fun f -> f "[SSH_FXP_REMOVE %ld] for %s\n%!" id path);
+
+        FS.remove root @@ Mirage_kv.Key.v path >>*= fun () ->
         (* FIXME: we always reply with status ok... *)
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
@@ -488,6 +493,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let newpath_length = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+path_length) 4)) in
         let newpath = Cstruct.to_string (Cstruct.sub data (8+path_length+4) newpath_length) in
         Log.debug (fun f -> f "[SSH_FXP_RENAME %ld] for %s->%s\n%!" id path newpath);
+
         let pathkey = Mirage_kv.Key.v path in
         let newpathkey = Mirage_kv.Key.v newpath in
         remove_if_present root newpathkey >>= fun() ->
@@ -507,9 +513,10 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
         (* it seems that we cannot create empty directory, so I try to add a dummy .empty file *)
+        Log.debug (fun f -> f "[SSH_FXP_MKDIR %ld] for %s\n%!" id path);
+
         let dummykey = Mirage_kv.Key.v (String.concat "/" [path; ".empty"]) in
         FS.set root dummykey "" >>*= fun () ->
-        Log.debug (fun f -> f "[SSH_FXP_MKDIR %ld] for %s\n%!" id path);
         (* FIXME: we always reply with status ok... *)
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
@@ -521,6 +528,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
         (* let attrs = ??? *)
         Log.debug (fun f -> f "[SSH_FXP_SETSTAT %ld] for %s\n%!" id path);
+
         (* FIXME: we always reply with status ok... *)
         let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
@@ -532,11 +540,13 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
         (* let attrs = ??? *)
         Log.debug (fun f -> f "[SSH_FXP_FSETSTAT %ld] for %s\n%!" id handle);
+
         begin match (Hashtbl.find_opt working_table handle) with
         | None -> (* if the handle is not already opened -> error *)
           let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_INVALID_HANDLE) in
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
           >>= fun () -> Lwt.return working_table
+
         | _ -> (* if the handle is already opened -> remove the handle entry in the hash table *)
           let _ = path_of_handle root handle in
           (* FIXME: we always reply with status ok... *)
@@ -552,7 +562,8 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let offset = uint64_of_cs (Cstruct.sub data (8+handle_length) 8) in
         let newdata_length = Int32.to_int (uint32_of_cs (Cstruct.sub data (8+handle_length+8) 4)) in
         let newdata = Cstruct.sub data (8+handle_length+8+4) newdata_length in
-        path_of_handle root handle >>= fun(path) ->
+
+        path_of_handle root handle >>= fun path ->
         Log.debug (fun f -> f "[SSH_FXP_WRITE %ld] '%s' @%Ld (%d)\n%!" id path offset newdata_length);
         (* FIXME: we always reply with status ok... *)
         let pathkey = Mirage_kv.Key.v path in
