@@ -22,7 +22,7 @@ chmod 600 username && \
 opam install chamelon-unix -y && \
 dd if=/dev/zero of=disk.img bs=1M count=32 && \
 chamelon format disk.img 4096 && \
-chamelon write disk.img 4096 '/username.pub' username.pub
+chamelon write ./disk.img 4096 /username.pub "$(cat username.pub)"
 ```
 
 Any kind of filesystem should be ok to use as it will be seen on the client

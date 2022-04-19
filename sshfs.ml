@@ -215,7 +215,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
   let get_file_data root filename =
     FS.get root @@ Mirage_kv.Key.v filename >|= function
     | Error e ->
-        Log.warn (fun f -> f "*** accessing file %s with erro %a\n%!" filename FS.pp_error e);
+        Log.warn (fun f -> f "*** accessing file %s with error %a\n%!" filename FS.pp_error e);
         Cstruct.create 0
     | Ok content ->
         Log.debug (fun f -> f "*** file %s have content : '%s'\n%!" filename content);
@@ -271,9 +271,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
    * 4+2+1 : rws for others
    *)
   let permission root path =
-    let parent = Mirage_kv.Key.parent path in
-
-    if (String.equal (Mirage_kv.Key.to_string parent) "") then (* permissions for / *)
+    if (String.equal (Mirage_kv.Key.to_string path) "/") then (* permissions for / *)
       let payload = Cstruct.concat [
       uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
       uint64_to_cs 0L ; (* size value *)
@@ -281,23 +279,28 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       Lwt.return (SSH_FXP_ATTRS, payload)
 
     else (* path exists? and is a folder or a file? *)
-      FS.exists root path >|= function
-      | Error _ -> (* FIXME *)
-          (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
-      | Ok (Some `Dictionary) ->
-          let payload = Cstruct.concat [
-          uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-          uint64_to_cs 10L ; (* !!FIXME!! size value *)
-          uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
-          (SSH_FXP_ATTRS, payload)
-      | Ok (Some `Value) ->
-          let payload = Cstruct.concat [
-          uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-          uint64_to_cs 10L ; (* !!FIXME!! size value *)
-          uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
-          (SSH_FXP_ATTRS, payload)
-      | Ok (None) ->
-          (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
+      FS.exists root path >>= begin function
+      | Error e ->
+          Log.debug (fun f -> f "*** get permissions for file %s error: %a\n%!" (Mirage_kv.Key.to_string path) FS.pp_error e);
+          Lwt.return (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
+      | Ok _ ->
+          FS.list root path >>= begin function
+          | Error _ -> (* This key does NOT contains anything: it's a file *)
+              Log.debug (fun f -> f "%s is a file\n%!" (Mirage_kv.Key.to_string path));
+              let payload = Cstruct.concat [
+              uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+              uint64_to_cs 10L ; (* !!FIXME!! size value *)
+              uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
+              Lwt.return (SSH_FXP_ATTRS, payload)
+          | Ok _ -> (* This key does contains something: it's a folder *)
+              Log.debug (fun f -> f "%s is a folder\n%!" (Mirage_kv.Key.to_string path));
+              let payload = Cstruct.concat [
+              uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+              uint64_to_cs 10L ; (* !!FIXME!! size value *)
+              uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
+              Lwt.return (SSH_FXP_ATTRS, payload)
+          end
+       end
 
   let permission_for_newfile =
     let payload = Cstruct.concat [
@@ -330,7 +333,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let pathkey = Mirage_kv.Key.v path in
         permission root pathkey >>= fun (reply_type, payload) ->
         sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
-        >>= fun () -> Lwt.return working_table
+        >>= fun () -> Log.debug (fun f -> f "[return from sshout %ld]\n%!" id); Lwt.return working_table
 
       (* 6.8 Retrieving File Attributes *)
       | SSH_FXP_FSTAT->
@@ -440,21 +443,24 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
         path_of_handle root handle >>= fun path ->
         Log.debug (fun f -> f "[SSH_FXP_READ %ld] for '%s' @%Ld (%ld)\n%!" id path offset len);
-        let s = 10L in (* !!FIXME!! size is hardcoded *)
-        if offset <= s then
-          FS.get root @@ Mirage_kv.Key.v path  >>= function
-          | Error _ -> Lwt.return working_table
-          | Ok data ->
-              let data = Cstruct.of_string data in
-              let payload = Cstruct.sub data (Int64.to_int offset) (Int32.to_int len) in
+        FS.get root @@ Mirage_kv.Key.v path >>= begin function
+        | Error e ->
+            Log.debug (fun f -> f "*** read for file %s error: %a\n%!" path FS.pp_error e);
+            Lwt.return working_table
+        | Ok data ->
+            let data = Cstruct.of_string data in
+            if offset <= Int64.of_int (Cstruct.length data) then begin
+              let len = min (Int32.to_int len) (Cstruct.length data) in
+              let payload = Cstruct.sub data (Int64.to_int offset) len in
               sshout (to_client SSH_FXP_DATA (Cstruct.concat [uint32_to_cs id ;
                 uint32_to_cs (Int32.of_int(Cstruct.length payload));
                 payload ]))
               >>= fun () -> Lwt.return working_table
-        else
-          let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_EOF) in
-          sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
-          >>= fun () -> Lwt.return working_table
+            end else
+              let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_EOF) in
+              sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
+              >>= fun () -> Lwt.return working_table
+        end
 
       (* 6.3 Opening, Creating, and Closing Files *)
       | SSH_FXP_CLOSE ->
