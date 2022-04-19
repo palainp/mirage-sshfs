@@ -16,13 +16,13 @@
 
 open Lwt.Infix
 
-module Make (B: Mirage_block.S) = struct
+module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
   let log_src = Logs.Src.create "sshfs_protocol" ~doc:"Protocol dealer for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   module CCM = Block_ccm.Make(B)
-  module FS = Fat.Make(CCM)
+  module FS = Kv.Make(CCM)(P)
 
   let fail fmt = Fmt.kstr Lwt.fail_with fmt
 
@@ -32,7 +32,7 @@ module Make (B: Mirage_block.S) = struct
 
   let connect disk blockkey =
     CCM.connect ~key:(Cstruct.of_hex blockkey) disk >>= fun disk ->
-    FS.connect disk
+    FS.connect ~program_block_size:16 ~block_size:512 disk
 
   type sshfs_pflags =
     | SSH_FXF_READ
@@ -212,36 +212,18 @@ module Make (B: Mirage_block.S) = struct
     let dat = Cstruct.sub msg 1 ((Cstruct.length msg) -1) in
     typ, dat
 
-  let rec accessing_path path = 
-    let first_slash_idx = Option.value ~default:(~-1) (String.index_from_opt path 0 '/') in
-    if (first_slash_idx = ~-1) then (* no more '/' *)
-      Lwt.return ("", path)
-    else
-      let current_dir = String.sub path 0 first_slash_idx in
-      let remaining = (String.sub path (first_slash_idx+1) (String.length path - (first_slash_idx+1))) in
-      accessing_path remaining >>= fun (dirlisting, last) ->
-      (* WARNING: calling with a trailing / will cause last to be empty  *)
-      if (String.equal last "") then
-        Lwt.return (current_dir, dirlisting)
-      else
-        Lwt.return ((String.concat "/" [current_dir; dirlisting]), last)
-
   let file_buf root file =
-    accessing_path file >>= fun (dirlisting, last) ->
-    FS.listdir root dirlisting >>*= fun res ->
-    if (List.mem last res) then
-      FS.size root file >>*= fun (s) ->
-      FS.read root file 0 (Int64.to_int s) >>*= fun payload -> (*TODO: avoid buffer overflow as the file is controlled by a user *)
-      let payload = Cstruct.concat payload in
-      Lwt.return payload
-    else
+    FS.get root file >|= function
+    | Error _ ->
 (*      Log.warn (fun f -> f "*** file %s not found\n%!" file);*)
-      Lwt.return (Cstruct.create 0)
+        Lwt.return (Cstruct.create 0)
+    | Ok content ->
+        Lwt.return (Cstruct.of_string content)
 
   let is_present root path =
-    accessing_path path >>= fun (dirlisting, last) ->
-    FS.listdir root dirlisting >>*= fun res ->
-    Lwt.return (List.mem last res)
+    FS.exists root path >|= function
+    | Error _ -> false
+    | Ok _ -> true
 
   let path_to_handle _ path =
     let handle = path in
@@ -256,36 +238,28 @@ module Make (B: Mirage_block.S) = struct
     Lwt.return (handle, SSH_FXP_HANDLE, payload_of_string handle)
 
   let remove_if_present root path =
-    is_present root path >>= fun b -> if b then begin
-      Log.debug (fun f -> f "[remove_if_present] %s exists -> rm it\n%!" path);
-      FS.destroy root path >>*= fun () -> Lwt.return_unit
-    end else
-      Lwt.return_unit
+    FS.remove root path >>*= fun () -> Lwt.return_unit
 
   let create_if_absent root path =
-    is_present root path >>= fun b -> if not b then begin
-      Log.debug (fun f -> f "[create_if_absent] %s does not exists -> touch it\n%!" path);
-      FS.create root path >>*= fun () -> Lwt.return_unit
-    end else
-      Lwt.return_unit
+    FS.set root path "" >>*= fun () -> Lwt.return_unit
 
   let flush_file_if pflags root path =
     if (pflags land (sshfs_pflags_to_int SSH_FXF_TRUNC))==(sshfs_pflags_to_int SSH_FXF_TRUNC) then begin 
-      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
+      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" (Mirage_kv.Key.to_string path));
       remove_if_present root path >>= fun () -> create_if_absent root path
     end else
       Lwt.return_unit
 
   let create_file_if pflags root path =
     if (pflags land (sshfs_pflags_to_int SSH_FXF_CREAT))==(sshfs_pflags_to_int SSH_FXF_CREAT) then begin
-      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" path);
+      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" (Mirage_kv.Key.to_string path));
       create_if_absent root path
     end else
       Lwt.return_unit
 
   let touch_file_if pflags root path =
     if ((pflags land (sshfs_pflags_to_int SSH_FXF_APPEND))==(sshfs_pflags_to_int SSH_FXF_APPEND)) then begin 
-      Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" path);
+      Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" (Mirage_kv.Key.to_string path));
       create_if_absent root path
     end else Lwt.return_unit
 
@@ -296,34 +270,33 @@ module Make (B: Mirage_block.S) = struct
    * 4+2+1 : rws for others
    *)
   let permission root path =
-    accessing_path path >>= fun (dirlisting, last) ->
+    let parent = Mirage_kv.Key.parent path in
 
-    if (String.equal path "/") then
+    if (String.equal (Mirage_kv.Key.to_string parent) "") then (* permissions for / *)
       let payload = Cstruct.concat [
       uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
       uint64_to_cs 0L ; (* size value *)
       uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)] in
       Lwt.return (SSH_FXP_ATTRS, payload)
 
-    else (* path exists ?*)
-      FS.listdir root dirlisting >>*= fun res ->
-
-      if (List.mem last res) then
-        FS.stat root path >>*= function
-          | { directory = true; size=s; read_only=_; _ } -> (* FIXME: ro information is not used *)
-            let payload = Cstruct.concat [
-            uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-            uint64_to_cs s ; (* size value *)
-            uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
-            Lwt.return (SSH_FXP_ATTRS, payload)
-          | { directory = false; size=s; _ } ->
-            let payload = Cstruct.concat [
-            uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-            uint64_to_cs s ; (* size value *)
-            uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
-            Lwt.return (SSH_FXP_ATTRS, payload)
-      else
-        Lwt.return (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
+    else (* path exists? and is a folder or a file? *)
+      FS.exists root path >|= function
+      | Error _ -> (* FIXME *)
+          (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
+      | Ok (Some `Dictionary) ->
+          let payload = Cstruct.concat [
+          uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          uint64_to_cs 10L ; (* !!FIXME!! size value *)
+          uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
+          (SSH_FXP_ATTRS, payload)
+      | Ok (Some `Value) ->
+          let payload = Cstruct.concat [
+          uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          uint64_to_cs 10L ; (* !!FIXME!! size value *)
+          uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
+          (SSH_FXP_ATTRS, payload)
+      | Ok (None) ->
+          (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
 
   let permission_for_newfile =
     let payload = Cstruct.concat [
@@ -332,8 +305,9 @@ module Make (B: Mirage_block.S) = struct
     Lwt.return (SSH_FXP_ATTRS, payload)
 
   let lsdir root path =
-    FS.listdir root path >>*= fun res ->
-    Lwt.return res
+    FS.list root path >|= function
+    | Error _ -> []
+    | Ok res -> res
 
   (* version 3 used by openssh : https://filezilla-project.org/specs/draft-ietf-secsh-filexfer-02.txt *)
   let reply message sshout _ssherror working_table root () =
@@ -352,7 +326,8 @@ module Make (B: Mirage_block.S) = struct
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
         Log.debug (fun f -> f "[SSH_FXP_LSTAT %ld] for '%s'\n%!" id path);
-        permission root path >>= fun (reply_type, payload) ->
+        let pathkey = Mirage_kv.Key.v path in
+        permission root pathkey >>= fun (reply_type, payload) ->
         sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
@@ -377,7 +352,8 @@ module Make (B: Mirage_block.S) = struct
           Log.debug (fun f -> f "[SSH_FXP_OPENDIR %ld] handle is '%s'\n%!" id handle);
           sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
           >>= fun () -> begin
-            lsdir root path >>= fun(content_list) ->
+            let pathkey = Mirage_kv.Key.v path in
+            lsdir root pathkey >>= fun(content_list) ->
             Hashtbl.add working_table handle content_list ; Lwt.return working_table
           end
         | _ -> (* if the handle is already opened -> error *)
@@ -391,33 +367,40 @@ module Make (B: Mirage_block.S) = struct
         let handle_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
         Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s'\n%!" id handle);
+
         begin match (Hashtbl.find_opt working_table handle) with
         | None -> (* if the handle is not already opened -> error *)
           let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_INVALID_HANDLE) in
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
           >>= fun () -> Lwt.return working_table
+
         | remaining_list -> (* if the handle is already opened -> reply to the client or EOF *)
           let remaining_list = Option.get remaining_list in
-          if (List.length remaining_list == 0) then begin
+          begin match remaining_list with
+          | [] ->
+            (* if we exahuted the list of files/folder inside the requested handle *)
             Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s' no more content\n%!" id handle);
             let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_EOF) in
             sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
             >>= fun () -> Lwt.return working_table
-          end else begin
-            let head = List.hd remaining_list in
-            path_of_handle root handle >>= fun(path) ->
-            let dirname = match path with
-              | "/" -> head
-              | _ -> String.concat "/" [ path; head]
+          | head :: tail ->
+            (* if we still have something to give *)
+            let headstr = match head with 
+            | (str,_) -> str
             in
-            Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle dirname);
-            permission root dirname >>= fun (_, stats) ->
+            path_of_handle root handle >>= fun(path) ->
+            let name = match path with
+              | "/" -> headstr  (* for /  we just give the file name *)
+              | _ -> String.concat "/" [ path; headstr ] (* for not / we give the full pathname *)
+            in
+            Log.debug (fun f -> f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle name);
+            permission root (Mirage_kv.Key.v name) >>= fun (_, stats) ->
             let payload = Cstruct.concat [ uint32_to_cs 1l ; (* count the number of names returned *)
-              payload_of_string head ; (* short-name *)
+              payload_of_string headstr ; (* short-name *)
               payload_of_string "1234567890123123456781234567812345678123456789012" ; (* FIXME: long-name *)
               stats ] in
             sshout (to_client SSH_FXP_NAME (Cstruct.concat [ uint32_to_cs id ; payload ]) )
-            >>= fun () -> begin Hashtbl.replace working_table handle (List.tl remaining_list) ; Lwt.return working_table end
+            >>= fun () -> begin Hashtbl.replace working_table handle tail ; Lwt.return working_table end
           end
         end
 
@@ -431,9 +414,10 @@ module Make (B: Mirage_block.S) = struct
         reply_handle root path >>= fun (handle, reply_type, payload) ->
         begin match (Hashtbl.find_opt working_table handle) with
         | None -> (* if the handle is not already opened *)
-          flush_file_if pflags root path >>= fun () ->
-          create_file_if pflags root path >>= fun () ->
-          touch_file_if pflags root path >>= fun () ->
+          let pathkey = Mirage_kv.Key.v path in
+          flush_file_if pflags root pathkey >>= fun () ->
+          create_file_if pflags root pathkey >>= fun () ->
+          touch_file_if pflags root pathkey >>= fun () ->
           sshout (to_client reply_type (Cstruct.concat [ uint32_to_cs id ; payload ]) )
           >>= fun () -> begin Hashtbl.add working_table handle [] ; Lwt.return working_table end
         | _ -> (* if the handle is already opened -> error *)
@@ -450,14 +434,18 @@ module Make (B: Mirage_block.S) = struct
         let len = uint32_of_cs (Cstruct.sub data (8+handle_length+8) 4) in
         path_of_handle root handle >>= fun(path) ->
         Log.debug (fun f -> f "[SSH_FXP_READ %ld] for '%s' @%Ld (%ld)\n%!" id path offset len);
-        FS.size root path >>*= fun s ->
+        let s = 10L in (* !!FIXME!! size is hardcoded *)
         if offset <= s then
-          FS.read root path (Int64.to_int offset) (Int32.to_int len) >>*= fun payload ->
-          let payload = Cstruct.concat payload in
-          sshout (to_client SSH_FXP_DATA (Cstruct.concat [uint32_to_cs id ;
-            uint32_to_cs (Int32.of_int(Cstruct.length payload));
-            payload ]))
-          >>= fun () -> Lwt.return working_table
+          let pathkey = Mirage_kv.Key.v path in
+          FS.get root pathkey >|= function
+          | Error _ -> Lwt.return working_table
+          | Ok data ->
+              let data = Cstruct.of_string data in
+              let payload = Cstruct.sub data (Int64.to_int offset) (Int32.to_int len) in
+              sshout (to_client SSH_FXP_DATA (Cstruct.concat [uint32_to_cs id ;
+                uint32_to_cs (Int32.of_int(Cstruct.length payload));
+                payload ]))
+              >>= fun () -> Lwt.return working_table
         else
           let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_EOF) in
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
