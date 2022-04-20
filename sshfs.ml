@@ -287,11 +287,17 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           FS.list root path >>= begin function
           | Error _ -> (* This key does NOT contains anything: it's a file *)
               Log.debug (fun f -> f "%s is a file\n%!" (Mirage_kv.Key.to_string path));
-              let payload = Cstruct.concat [
-              uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-              uint64_to_cs 10L ; (* !!FIXME!! size value *)
-              uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
-              Lwt.return (SSH_FXP_ATTRS, payload)
+              FS.get root path >>= begin function
+              | Error _ ->
+                  Lwt.return (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
+              | Ok data ->
+                  let data = Cstruct.of_string data in
+                  let payload = Cstruct.concat [
+                  uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+                  uint64_to_cs (Int64.of_int (Cstruct.length data)) ; (* !!FIXME!! size value *)
+                  uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
+                  Lwt.return (SSH_FXP_ATTRS, payload)
+              end
           | Ok _ -> (* This key does contains something: it's a folder *)
               Log.debug (fun f -> f "%s is a folder\n%!" (Mirage_kv.Key.to_string path));
               let payload = Cstruct.concat [
@@ -577,7 +583,9 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         | Error _ -> Lwt.return working_table
         | Ok data ->
             let data = Cstruct.of_string data in
-            let before = Cstruct.sub data 0 ((Int64.to_int offset)-1) in
+            let offset_before = max 0 ((Int64.to_int offset)-1) in
+            let len = min (Cstruct.length data) offset_before in
+            let before = Cstruct.sub data 0 len in
             let newdata = Cstruct.concat [before; newdata] in
             FS.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
             let payload = uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_OK) in
