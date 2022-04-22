@@ -59,6 +59,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     | SSH_FXF_EXCL -> 0x00000020
     | SSH_FXF_UNDEF -> 0
 
+  (* gives the content of a file, this is used by the ssh server to key the public keys *)
   let get_file_data root filename =
     KV.get root @@ Mirage_kv.Key.v filename >|= function
     | Error e ->
@@ -68,6 +69,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         Log.debug (fun f -> f "*** file %s have content : '%s'\n%!" filename content);
         Cstruct.of_string content
 
+  (* for now paths and handles are id but we can change that here *)
   let path_to_handle _ path =
     let handle = path in
     Lwt.return handle
@@ -81,9 +83,11 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     | Error _ -> false
     | Ok _ -> true
 
+  (* silently discard the error if the key is absent *)
   let remove_if_present root path =
     KV.remove root @@ Mirage_kv.Key.v path >>*= fun () -> Lwt.return_unit
 
+  (* silently discard the error if the key is absent *)
   let create_if_absent root path =
     let pathkey = Mirage_kv.Key.v path in
     KV.set root pathkey "" >>*= fun () -> Lwt.return_unit
@@ -153,17 +157,11 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           end
        end
 
-  let permission_for_newfile =
-    let payload = Cstruct.concat [
-            Helpers.uint32_to_cs 4l ; (* ~SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-            Helpers.uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
-    Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
-
+  (* TODO: do not shows up the . file as it's only used to create directories *)
   let lsdir root path =
     KV.list root @@ Mirage_kv.Key.v path >|= function
     | Error _ -> []
-    | Ok res -> (* FIXME: do not shows up the . file as it's only used to create directories *)
-        res
+    | Ok res -> res
 
   let read root path = 
     KV.get root @@ Mirage_kv.Key.v path >>= function
@@ -195,6 +193,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
   let remove root path =
     KV.remove root @@ Mirage_kv.Key.v path
 
+  (* TODO: deal with renaming of directories... *)
   let rename root oldpath newpath =
     let oldpathkey = Mirage_kv.Key.v oldpath in
     let newpathkey = Mirage_kv.Key.v newpath in

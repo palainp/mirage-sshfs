@@ -79,7 +79,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let handle = Cstruct.to_string (Cstruct.sub data 8 handle_length) in
         FS.path_of_handle root handle >>= fun path ->
         Log.debug (fun f -> f "[SSH_FXP_FSTAT %ld] for %s\n%!" id path);
-        FS.permission_for_newfile >>= fun (reply_type, payload) ->
+        FS.permission root path >>= fun (reply_type, payload) ->
         sshout (to_client reply_type (Cstruct.concat [ Helpers.uint32_to_cs id ; payload ]) )
         >>= fun () -> Lwt.return working_table
 
