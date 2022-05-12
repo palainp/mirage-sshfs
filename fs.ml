@@ -30,7 +30,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     | Ok x    -> f x
 
   let connect disk =
-    KV.connect ~program_block_size:16 ~block_size:4096 disk
+    KV.connect ~program_block_size:16 disk
 
   type file_pflags =
     | SSH_FXF_READ
