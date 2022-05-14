@@ -78,19 +78,31 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     let path = handle in
     Lwt.return path
 
+  (* silently discard the error if the key is absent *)
   let is_present root path =
     KV.exists root @@ Mirage_kv.Key.v path >|= function
     | Error _ -> false
-    | Ok _ -> true
+    | Ok data ->
+      begin match data with
+      | None -> false
+      | Some _ -> true
+    end
 
-  (* silently discard the error if the key is absent *)
   let remove_if_present root path =
-    KV.remove root @@ Mirage_kv.Key.v path >>*= fun () -> Lwt.return_unit
+    is_present root path >>= begin function
+    | true ->
+      KV.remove root @@ Mirage_kv.Key.v path >>*= fun () -> Lwt.return_unit
+    | false ->
+      Lwt.return_unit
+  end
 
-  (* silently discard the error if the key is absent *)
   let create_if_absent root path =
-    let pathkey = Mirage_kv.Key.v path in
-    KV.set root pathkey "" >>*= fun () -> Lwt.return_unit
+    is_present root path >>= begin function
+    | true ->
+      Lwt.return_unit
+    | false ->
+      KV.set root (Mirage_kv.Key.v path) "" >>*= fun () -> Lwt.return_unit
+  end
 
   let flush_file_if pflags root path =
     if (pflags land (file_pflags_to_int SSH_FXF_TRUNC))==(file_pflags_to_int SSH_FXF_TRUNC) then begin 
@@ -170,30 +182,40 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       Lwt.return ""
     | Ok data -> Lwt.return data
 
+  (**
+   pre: path is the key for [data(0..data_length-1)]
+   post: path is the key for
+       [data(0..offset-1), newdata(offset..offset+newdata_length-1), data(offset+newdata_length..data_length-1)]
+       Q: take care when data_length < offset
+       Q: take care when offset < 0
+   *)
   let write root path offset newdata_length newdata =
-    let pathkey = Mirage_kv.Key.v path in
-    KV.get root pathkey >>= begin function
+    KV.get root (Mirage_kv.Key.v path) >>= begin function
     | Error _ -> Lwt.return_unit
     | Ok data ->
        let data = Cstruct.of_string data in
        let data_length = Cstruct.length data in
 
-       let offset_before = max 0 ((Int64.to_int offset)-1) in
-       let len = min data_length offset_before in
-       let before = Cstruct.sub data 0 len in
+       let offset_before = max 0 (Int64.to_int offset) in
+       let len_before = min data_length offset_before in
+       let before = Cstruct.sub data 0 len_before in
 
        let offset_after = min ((Int64.to_int offset)+newdata_length) data_length in
-       let after = Cstruct.sub data offset_after (data_length-len) in
+       let len_after = max 0 (data_length-offset_after) in
+       let after = Cstruct.sub data offset_after len_after in
 
        let newdata = Cstruct.concat [before; newdata; after] in
-       KV.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
+       (* FIXME: is there a way to update a key ? *)
+       KV.remove root @@ Mirage_kv.Key.v path >>*= fun () ->
+       KV.set root (Mirage_kv.Key.v path) (Cstruct.to_string newdata) >>*= fun () ->
        Lwt.return_unit
     end
 
+  (* TODO: deal remove directories... *)
   let remove root path =
     KV.remove root @@ Mirage_kv.Key.v path
 
-  (* TODO: deal with renaming of directories... *)
+  (* TODO: deal rename directories... *)
   let rename root oldpath newpath =
     let oldpathkey = Mirage_kv.Key.v oldpath in
     let newpathkey = Mirage_kv.Key.v newpath in
