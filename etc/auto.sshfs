@@ -1,0 +1,1 @@
+local -fstype=fuse,allow_other,port=22022,IdentityFile=/root/username :sshfs\#username@127.0.0.1:/

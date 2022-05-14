@@ -44,7 +44,7 @@ the following commands and use the encrypted image file.
 
 ## Running Unix "chrooted" SSHFS
 ```
-mirage configure -t unix && \
+mirage configure -t unix -f src/config.ml && \
 make depend && \
 make && \
 ./dist/mirage_sshfs --port 22022 --user username --seed 111213
@@ -56,7 +56,7 @@ port and username are `18022` and `mirage`.
 
 ## Running Hvt SSHFS VM
 ```
-mirage configure -t hvt && \
+mirage configure -t hvt -f src/config.ml && \
 make depend && \
 make
 ```
@@ -72,7 +72,7 @@ solo5-hvt --net:service=tap100 \
 
 ## Running Qubes SSHFS VM
 ```
-mirage configure -t qubes && \
+mirage configure -t qubes -f src/config.ml && \
 make depend && \
 make
 ```
@@ -123,6 +123,10 @@ sshfs username@hostserver:/ \
 ls -l /path/mount/ && \
 cat /path/mount/username.pub
 ```
+
+## (Auto-)Connecting to the unikernel
+
+See `etc/README.md`.
 
 [mirage-sshfs]: https://github.com/palainp/mirage-sshfs
 [chamelon]: https://github.com/yomimono/chamelon/
