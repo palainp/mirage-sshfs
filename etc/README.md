@@ -22,7 +22,7 @@ otherwise ssh may consider that the keyfile is not safe enough.
 Also note that root must accept the server fingerprint prior any
 autofs connexion, the easiest way to do that is to connect to the
 server a first time before using autofs.
-Another, discouraged, option can be to add `StrictHostKeycheing=no`
+Another, discouraged, option can be to add `StrictHostKeyChecking=no`
 in the `auto.sshfs` file.
 
 This will automount the block when you move to `/mnt/sshfs/local`
