@@ -44,10 +44,10 @@ the following commands and use the encrypted image file.
 
 ## Running Unix "chrooted" SSHFS
 ```
-mirage configure -t unix && \
+mirage configure -t unix -f src/config.ml && \
 make depend && \
-make && \
-./dist/mirage_sshfs --port 22022 --user username --seed 111213
+dune build && \
+./src/dist/mirage_sshfs --port 22022 --user username --seed 111213
 ```
 
 The server gives access to the content of the `disk.img` file with the user
@@ -56,9 +56,9 @@ port and username are `18022` and `mirage`.
 
 ## Running Hvt SSHFS VM
 ```
-mirage configure -t hvt && \
+mirage configure -t hvt -f src/config.ml && \
 make depend && \
-make
+dune build
 ```
 
 You have to set up the solo5-hvt environment as described in the [solo5][]
@@ -66,15 +66,15 @@ setup page. Then you can run the unikernel with solo5:
 ```
 solo5-hvt --net:service=tap100 \
   --block:storage=disk.img \
-  ./dist/mirage_sshfs.hvt \
+  ./src/dist/mirage_sshfs.hvt \
   --port 22022 --user username --seed 111213
 ```
 
 ## Running Qubes SSHFS VM
 ```
-mirage configure -t qubes && \
+mirage configure -t qubes -f src/config.ml && \
 make depend && \
-make
+dune build
 ```
 
 To create a VM using the new unikernel, you can run the following commands in
@@ -123,6 +123,10 @@ sshfs username@hostserver:/ \
 ls -l /path/mount/ && \
 cat /path/mount/username.pub
 ```
+
+## (Auto-)Connecting to the unikernel
+
+See `etc/README.md`.
 
 [mirage-sshfs]: https://github.com/palainp/mirage-sshfs
 [chamelon]: https://github.com/yomimono/chamelon/
