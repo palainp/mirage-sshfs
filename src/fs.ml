@@ -23,10 +23,13 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
   module Chamelon = Kv.Make(B)(P)
 
-  let fail fmt = Fmt.kstr Lwt.fail_with fmt
+  let fail pp e = Lwt.fail_with (Format.asprintf "%a" pp e)
+
+  let fail_read = fail Chamelon.pp_error
+  let fail_write = fail Chamelon.pp_write_error
 
   let (>>*=) m f = m >>= function
-    | Error e -> fail "%a" Chamelon.pp_write_error (e :> Chamelon.write_error)
+    | Error e -> fail_write e
     | Ok x    -> f x
 
   let connect disk =
@@ -72,11 +75,8 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
   let is_present root path =
     Chamelon.exists root @@ Mirage_kv.Key.v path >|= function
     | Error _ -> false
-    | Ok data ->
-      begin match data with
-      | None -> false
-      | Some _ -> true
-    end
+    | Ok None -> false
+    | Ok (Some _) -> true
 
   let remove_if_present root path =
     is_present root path >>= begin function
@@ -133,6 +133,8 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       Chamelon.exists root path >>= begin function
       | Error e ->
           Log.debug (fun f -> f "*** get permissions for file %s error: %a\n%!" (Mirage_kv.Key.to_string path) Chamelon.pp_error e);
+          Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
+      | Ok None ->
           Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
       | Ok _ ->
           Chamelon.list root path >>= begin function
