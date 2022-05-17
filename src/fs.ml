@@ -28,6 +28,10 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
   let fail_read = fail Chamelon.pp_error
   let fail_write = fail Chamelon.pp_write_error
 
+  let (>>+=) m f = m >>= function
+    | Error e -> fail_read e
+    | Ok x    -> f x
+
   let (>>*=) m f = m >>= function
     | Error e -> fail_write e
     | Ok x    -> f x
@@ -72,68 +76,63 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     Lwt.return path
 
   (* silently discard the error if the key is absent *)
-  let is_present root path =
-    Chamelon.exists root @@ Mirage_kv.Key.v path >|= function
-    | Error _ -> false
-    | Ok None -> false
-    | Ok (Some _) -> true
+  let is_present root pathkey =
+    Chamelon.exists root pathkey >>+= function
+    | None -> Lwt.return false
+    | (Some _) -> Lwt.return true
 
-  let is_file root path =
-    Chamelon.exists root @@ Mirage_kv.Key.v path >|= function
-    | Error _ -> false
-    | Ok None -> false
-    | Ok (Some `Dictionary) -> false
-    | Ok (Some `Value) -> true
+  let is_file root pathkey =
+    Chamelon.exists root pathkey >>+= function
+    | None -> Lwt.return false
+    | (Some `Dictionary) -> Lwt.return false
+    | (Some `Value) -> Lwt.return true
 
-  let is_directory root path =
-    Chamelon.exists root @@ Mirage_kv.Key.v path >|= function
-    | Error _ -> false
-    | Ok None -> false
-    | Ok (Some `Dictionary) -> true
-    | Ok (Some `Value) -> false
+  let is_directory root pathkey =
+    Chamelon.exists root pathkey >>+= function
+    | None -> Lwt.return false
+    | (Some `Dictionary) -> Lwt.return true
+    | (Some `Value) -> Lwt.return false
 
-  let remove_if_present root path =
-    is_present root path >>= begin function
+  let remove_if_present root pathkey =
+    is_present root pathkey >>= function
     | true ->
-      Chamelon.remove root @@ Mirage_kv.Key.v path >>*= fun () -> Lwt.return_unit
+      Chamelon.remove root pathkey >>*= fun () -> Lwt.return_unit
     | false ->
       Lwt.return_unit
-  end
 
-  let create_if_absent root path =
-    is_present root path >>= begin function
+  let create_if_absent root pathkey =
+    is_present root pathkey >>= function
     | true ->
       Lwt.return_unit
     | false ->
-      Chamelon.set root (Mirage_kv.Key.v path) "" >>*= fun () -> Lwt.return_unit
-  end
+      Chamelon.set root pathkey "" >>*= fun () -> Lwt.return_unit
 
   let flush_file_if pflags root path =
+    let pathkey = Mirage_kv.Key.v path in
     if (pflags land (file_pflags_to_int SSH_FXF_TRUNC))==(file_pflags_to_int SSH_FXF_TRUNC) then begin 
       Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
-      remove_if_present root path >>= fun () -> create_if_absent root path
+      remove_if_present root pathkey >>= fun () -> create_if_absent root pathkey
     end else
       Lwt.return_unit
 
   let create_file_if pflags root path =
+    let pathkey = Mirage_kv.Key.v path in
     if (pflags land (file_pflags_to_int SSH_FXF_CREAT))==(file_pflags_to_int SSH_FXF_CREAT) then begin
       Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" path);
-      create_if_absent root path
+      create_if_absent root pathkey
     end else
       Lwt.return_unit
 
   let touch_file_if pflags root path =
+    let pathkey = Mirage_kv.Key.v path in
     if ((pflags land (file_pflags_to_int SSH_FXF_APPEND))==(file_pflags_to_int SSH_FXF_APPEND)) then begin 
       Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" path);
-      create_if_absent root path
+      create_if_absent root pathkey
     end else Lwt.return_unit
 
   let read root path =
-    Chamelon.get root @@ Mirage_kv.Key.v path >>= function
-    | Error e ->
-      Log.debug (fun f -> f "*** read for file %s error: %a\n%!" path Chamelon.pp_error e);
-      Lwt.return ""
-    | Ok data -> Lwt.return data
+    let pathkey = Mirage_kv.Key.v path in
+    Chamelon.get root pathkey >>+= fun data -> Lwt.return data
 
   (* permissions:
    * p:4096, d:16384, -:32768
@@ -150,10 +149,11 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
 
     else (* path exists? and is a folder or a file? *)
-      is_present root path >>= function
+      let pathkey = Mirage_kv.Key.v path in
+      is_present root pathkey >>= function
       | false ->
           Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
-      | true -> is_file root path >>= function
+      | true -> is_file root pathkey >>= function
         | true -> (* This is a file *)
           Log.debug (fun f -> f "%s is a file\n%!" path);
           read root path >>= fun data ->
@@ -179,7 +179,8 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
        Q: take care when offset < 0
    *)
   let write root path offset newdata_length newdata =
-    Chamelon.get root (Mirage_kv.Key.v path) >>= begin function
+    let pathkey = Mirage_kv.Key.v path in
+    Chamelon.get root pathkey >>= begin function
     | Error _ -> Lwt.return_unit
     | Ok data ->
        let data = Cstruct.of_string data in
@@ -195,32 +196,30 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
        let newdata = Cstruct.concat [before; newdata; after] in
        (* FIXME: is there a way to update a key ? *)
-       Chamelon.remove root @@ Mirage_kv.Key.v path >>*= fun () ->
-       Chamelon.set root (Mirage_kv.Key.v path) (Cstruct.to_string newdata) >>*= fun () ->
+       Chamelon.remove root pathkey >>*= fun () ->
+       Chamelon.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
        Lwt.return_unit
     end
 
   (* TODO: deal remove directories... *)
   let remove root path =
-    Chamelon.remove root @@ Mirage_kv.Key.v path
+    let pathkey = Mirage_kv.Key.v path in
+    Chamelon.remove root pathkey
 
   (* TODO: deal rename directories... *)
   let rename root oldpath newpath =
     let oldpathkey = Mirage_kv.Key.v oldpath in
     let newpathkey = Mirage_kv.Key.v newpath in
-    Chamelon.get root oldpathkey >>= begin function
-    | Error _ -> Lwt.return_unit
-    | Ok data ->
-        Chamelon.set root newpathkey data >>*= fun () ->
-        Chamelon.remove root oldpathkey >>*= fun () ->
-        Lwt.return_unit
-    end
+    remove_if_present root newpathkey >>= fun() ->
+    Chamelon.get root oldpathkey >>+= fun data ->
+    Chamelon.set root newpathkey data >>*= fun () ->
+    Chamelon.remove root oldpathkey >>*= fun () ->
+    Lwt.return_unit
 
   (* TODO: do not shows up the . file as it's only used to create directories *)
   let lsdir root path =
-    Chamelon.list root @@ Mirage_kv.Key.v path >|= function
-    | Error _ -> []
-    | Ok res -> res
+    let pathkey = Mirage_kv.Key.v path in
+    Chamelon.list root pathkey >>+= fun res -> Lwt.return res
 
   let mkdir root path =
     (* it seems that we cannot create empty directory, so I try to add a empty . file which must

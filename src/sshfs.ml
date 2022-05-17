@@ -232,7 +232,6 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         let newpath = Cstruct.to_string (Cstruct.sub data (8+path_length+4) newpath_length) in
         Log.debug (fun f -> f "[SSH_FXP_RENAME %ld] for %s->%s\n%!" id path newpath);
 
-        FS.remove_if_present root newpath >>= fun() ->
         FS.rename root path newpath >>= fun () ->
         let payload = Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 SSH_FX_OK) in
         sshout (to_client SSH_FXP_STATUS (Cstruct.concat [Helpers.uint32_to_cs id ; payload ]) )
