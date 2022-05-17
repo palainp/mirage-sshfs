@@ -107,28 +107,31 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     | false ->
       Chamelon.set root pathkey "" >>*= fun () -> Lwt.return_unit
 
-  let flush_file_if pflags root path =
-    let pathkey = Mirage_kv.Key.v path in
+  let flush_file_if pflags root pathkey =
     if (pflags land (file_pflags_to_int SSH_FXF_TRUNC))==(file_pflags_to_int SSH_FXF_TRUNC) then begin 
-      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" path);
+      Log.debug (fun f -> f "[flush_file_if] SSH_FXF_TRUNC `%s`\n%!" (Mirage_kv.Key.to_string pathkey));
       remove_if_present root pathkey >>= fun () -> create_if_absent root pathkey
     end else
       Lwt.return_unit
 
-  let create_file_if pflags root path =
-    let pathkey = Mirage_kv.Key.v path in
+  let create_file_if pflags root pathkey =
     if (pflags land (file_pflags_to_int SSH_FXF_CREAT))==(file_pflags_to_int SSH_FXF_CREAT) then begin
-      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" path);
+      Log.debug (fun f -> f "[create_file_if] SSH_FXF_CREAT `%s`\n%!" (Mirage_kv.Key.to_string pathkey));
       create_if_absent root pathkey
     end else
       Lwt.return_unit
 
-  let touch_file_if pflags root path =
-    let pathkey = Mirage_kv.Key.v path in
+  let touch_file_if pflags root pathkey =
     if ((pflags land (file_pflags_to_int SSH_FXF_APPEND))==(file_pflags_to_int SSH_FXF_APPEND)) then begin 
-      Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" path);
+      Log.debug (fun f -> f "[touch_file_if] SSH_FXF_APPEND `%s`\n%!" (Mirage_kv.Key.to_string pathkey));
       create_if_absent root pathkey
     end else Lwt.return_unit
+
+  let instruct_pflags pflags root path =
+    let pathkey = Mirage_kv.Key.v path in
+    flush_file_if pflags root pathkey >>= fun () ->
+    create_file_if pflags root pathkey >>= fun () ->
+    touch_file_if pflags root pathkey
 
   let read root path =
     let pathkey = Mirage_kv.Key.v path in

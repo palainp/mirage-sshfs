@@ -158,9 +158,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         reply_handle root path >>= fun (handle, reply_type, payload) ->
         begin match (Hashtbl.find_opt working_table handle) with
         | None -> (* if the handle is not already opened *)
-          FS.flush_file_if pflags root path >>= fun () ->
-          FS.create_file_if pflags root path >>= fun () ->
-          FS.touch_file_if pflags root path >>= fun () ->
+          FS.instruct_pflags pflags root path >>= fun () ->
           sshout (to_client reply_type (Cstruct.concat [ Helpers.uint32_to_cs id ; payload ]) )
           >>= fun () -> begin Hashtbl.add working_table handle [] ; Lwt.return working_table end
 
