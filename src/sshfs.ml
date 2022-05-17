@@ -31,7 +31,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     FS.connect disk
 
   let get_disk_key disk filename =
-    FS.get_file_data disk filename
+    FS.read disk filename
 
   let payload_of_string s =
     Cstruct.concat [Helpers.uint32_to_cs (Int32.of_int(String.length s)) ;

@@ -28,8 +28,8 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
   let user_db disk user =
     let keyfile = String.concat "" [user; ".pub"] in
     SSHFS.get_disk_key disk keyfile >>= fun key ->
-    Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s` (`%s`)\n%!" user keyfile (Cstruct.to_string key));
-    let key = Result.get_ok (Awa.Wire.pubkey_of_openssh key) in
+    Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s` (`%s`)\n%!" user keyfile key);
+    let key = Result.get_ok (Awa.Wire.pubkey_of_openssh (Cstruct.of_string key)) in
     let awa = Awa.Auth.make_user user [ key ] in
     Lwt.return [ awa ]
 

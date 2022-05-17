@@ -59,16 +59,6 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     | SSH_FXF_EXCL -> 0x00000020
     | SSH_FXF_UNDEF -> 0
 
-  (* gives the content of a file, this is used by the ssh server to key the public keys *)
-  let get_file_data root filename =
-    Chamelon.get root @@ Mirage_kv.Key.v filename >|= function
-    | Error e ->
-        Log.warn (fun f -> f "*** accessing file %s with error %a\n%!" filename Chamelon.pp_error e);
-        Cstruct.create 0
-    | Ok content ->
-        Log.debug (fun f -> f "*** file %s have content : '%s'\n%!" filename content);
-        Cstruct.of_string content
-
   (* for now paths and handles are id but we can change that here *)
   let path_to_handle _ path =
     let handle = path in
@@ -169,12 +159,6 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           end
        end
 
-  (* TODO: do not shows up the . file as it's only used to create directories *)
-  let lsdir root path =
-    Chamelon.list root @@ Mirage_kv.Key.v path >|= function
-    | Error _ -> []
-    | Ok res -> res
-
   let read root path = 
     Chamelon.get root @@ Mirage_kv.Key.v path >>= function
     | Error e ->
@@ -226,6 +210,12 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         Chamelon.remove root oldpathkey >>*= fun () ->
         Lwt.return_unit
     end
+
+  (* TODO: do not shows up the . file as it's only used to create directories *)
+  let lsdir root path =
+    Chamelon.list root @@ Mirage_kv.Key.v path >|= function
+    | Error _ -> []
+    | Ok res -> res
 
   let mkdir root path =
     (* it seems that we cannot create empty directory, so I try to add a empty . file which must
