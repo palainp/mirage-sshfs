@@ -78,6 +78,20 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     | Ok None -> false
     | Ok (Some _) -> true
 
+  let is_file root path =
+    Chamelon.exists root @@ Mirage_kv.Key.v path >|= function
+    | Error _ -> false
+    | Ok None -> false
+    | Ok (Some `Dictionary) -> false
+    | Ok (Some `Value) -> true
+
+  let is_directory root path =
+    Chamelon.exists root @@ Mirage_kv.Key.v path >|= function
+    | Error _ -> false
+    | Ok None -> false
+    | Ok (Some `Dictionary) -> true
+    | Ok (Some `Value) -> false
+
   let remove_if_present root path =
     is_present root path >>= begin function
     | true ->
@@ -114,6 +128,13 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       create_if_absent root path
     end else Lwt.return_unit
 
+  let read root path =
+    Chamelon.get root @@ Mirage_kv.Key.v path >>= function
+    | Error e ->
+      Log.debug (fun f -> f "*** read for file %s error: %a\n%!" path Chamelon.pp_error e);
+      Lwt.return ""
+    | Ok data -> Lwt.return data
+
   (* permissions:
    * p:4096, d:16384, -:32768
    * 256+128+64 : rwx for user
@@ -121,8 +142,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
    * 4+2+1 : rws for others
    *)
   let permission root path =
-    let path = Mirage_kv.Key.v path in
-    if (String.equal (Mirage_kv.Key.to_string path) "/") then (* permissions for / *)
+    if (String.equal path "/") then (* permissions for / *)
       let payload = Cstruct.concat [
       Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
       Helpers.uint64_to_cs 0L ; (* size value *)
@@ -130,43 +150,26 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
 
     else (* path exists? and is a folder or a file? *)
-      Chamelon.exists root path >>= begin function
-      | Error e ->
-          Log.debug (fun f -> f "*** get permissions for file %s error: %a\n%!" (Mirage_kv.Key.to_string path) Chamelon.pp_error e);
+      is_present root path >>= function
+      | false ->
           Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
-      | Ok None ->
-          Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
-      | Ok _ ->
-          Chamelon.list root path >>= begin function
-          | Error _ -> (* This key does NOT contains anything: it's a file *)
-              Log.debug (fun f -> f "%s is a file\n%!" (Mirage_kv.Key.to_string path));
-              Chamelon.get root path >>= begin function
-              | Error _ ->
-                  Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
-              | Ok data ->
-                  let data = Cstruct.of_string data in
-                  let payload = Cstruct.concat [
-                  Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-                  Helpers.uint64_to_cs (Int64.of_int (Cstruct.length data)) ; (* !!FIXME!! size value *)
-                  Helpers.uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
-                  Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
-              end
-          | Ok _ -> (* This key does contains something: it's a folder *)
-              Log.debug (fun f -> f "%s is a folder\n%!" (Mirage_kv.Key.to_string path));
-              let payload = Cstruct.concat [
-              Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-              Helpers.uint64_to_cs 10L ; (* !!FIXME!! size value *)
-              Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
-              Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
-          end
-       end
-
-  let read root path = 
-    Chamelon.get root @@ Mirage_kv.Key.v path >>= function
-    | Error e ->
-      Log.debug (fun f -> f "*** read for file %s error: %a\n%!" path Chamelon.pp_error e);
-      Lwt.return ""
-    | Ok data -> Lwt.return data
+      | true -> is_file root path >>= function
+        | true -> (* This is a file *)
+          Log.debug (fun f -> f "%s is a file\n%!" path);
+          read root path >>= fun data ->
+          let data = Cstruct.of_string data in
+          let payload = Cstruct.concat [
+          Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          Helpers.uint64_to_cs (Int64.of_int (Cstruct.length data)) ; (* !!FIXME!! size value *)
+          Helpers.uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
+          Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
+        | false -> (* This is a folder *)
+          Log.debug (fun f -> f "%s is a folder\n%!" path);
+          let payload = Cstruct.concat [
+          Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          Helpers.uint64_to_cs 10L ; (* !!FIXME!! size value *)
+          Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
+          Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
 
   (**
    pre: path is the key for [data(0..data_length-1)]
