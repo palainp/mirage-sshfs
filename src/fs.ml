@@ -137,6 +137,14 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     let pathkey = Mirage_kv.Key.v path in
     Chamelon.get root pathkey >>+= fun data -> Lwt.return data
 
+  let mtime root pathkey =
+    Chamelon.last_modified root pathkey >>+= fun (d, ps) ->
+    match Ptime.Span.of_d_ps (d, ps) with
+      | None ->
+        Lwt.return 0.0
+      | Some span ->
+        Lwt.return (Ptime.Span.to_float_s span)
+
   (* permissions:
    * p:4096, d:16384, -:32768
    * 256+128+64 : rwx for user
@@ -144,34 +152,46 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
    * 4+2+1 : rws for others
    *)
   let permission root path =
+    let pathkey = Mirage_kv.Key.v path in
     if (String.equal path "/") then (* permissions for / *)
+      mtime root pathkey >>= fun time ->
       let payload = Cstruct.concat [
       Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
       Helpers.uint64_to_cs 0L ; (* size value *)
-      Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)] in
+      Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)
+      Helpers.uint32_to_cs (Int32.of_float time) ; (* atime *)
+      Helpers.uint32_to_cs (Int32.of_float time)  (* mtime *)
+      ] in
       Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
 
     else (* path exists? and is a folder or a file? *)
-      let pathkey = Mirage_kv.Key.v path in
       is_present root pathkey >>= function
       | false ->
           Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
-      | true -> is_file root pathkey >>= function
+      | true ->
+        mtime root pathkey >>= fun time ->
+        is_file root pathkey >>= function
         | true -> (* This is a file *)
           Log.debug (fun f -> f "%s is a file\n%!" path);
           read root path >>= fun data ->
           let data = Cstruct.of_string data in
           let payload = Cstruct.concat [
-          Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-          Helpers.uint64_to_cs (Int64.of_int (Cstruct.length data)) ; (* !!FIXME!! size value *)
-          Helpers.uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)] in
+          Helpers.uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          Helpers.uint64_to_cs (Int64.of_int (Cstruct.length data)) ;
+          Helpers.uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)
+          Helpers.uint32_to_cs (Int32.of_float time) ; (* atime *)
+          Helpers.uint32_to_cs (Int32.of_float time)  (* mtime *)
+          ] in
           Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
         | false -> (* This is a folder *)
           Log.debug (fun f -> f "%s is a folder\n%!" path);
           let payload = Cstruct.concat [
-          Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          Helpers.uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
           Helpers.uint64_to_cs 10L ; (* !!FIXME!! size value *)
-          Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) (* perm: drwxrwxrwx *)] in
+          Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)
+          Helpers.uint32_to_cs (Int32.of_float time) ; (* atime *)
+          Helpers.uint32_to_cs (Int32.of_float time)  (* mtime *)
+          ] in
           Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
 
   (**
