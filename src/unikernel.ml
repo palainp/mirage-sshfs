@@ -24,14 +24,45 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
   module F = S.TCP
   module AWA_MIRAGE = Awa_mirage.Make(F)(T)(M)
   module SSHFS = Sshfs.Make(B)(P)
-  
-  let user_db disk user =
-    let keyfile = String.concat "" [user; ".pub"] in
-    SSHFS.get_disk_key disk keyfile >>= fun key ->
-    Log.debug (fun f -> f "Auth granted for user `%s` with pubkey `%s` (`%s`)\n%!" user keyfile key);
-    let key = Result.get_ok (Awa.Wire.pubkey_of_openssh (Cstruct.of_string key)) in
-    let awa = Awa.Auth.make_user user [ key ] in
-    Lwt.return [ awa ]
+
+
+  let add_key_of_string db user key =
+    let sshkey = Awa.Wire.pubkey_of_openssh (Cstruct.of_string key ) in
+    if (Result.is_ok sshkey) then begin
+      Log.debug (fun f -> f "Adding user `%s` with pubkey (`%s`)" user key);
+      let db = List.cons (Awa.Auth.make_user user [ (Result.get_ok sshkey) ] ) db in
+      Lwt.return db
+    end else Lwt.return db
+
+  let user_db disk =
+    let db = [] in
+
+    let default_user = Key_gen.user () in
+    let default_key = Key_gen.key () in
+    add_key_of_string db default_user default_key >>= fun db ->
+
+    (* then we scan the key directory (which may contains other files than .pub files) *)
+    SSHFS.get_list_key disk >>= fun flist ->
+    let rec add_usernames db l =
+      match l with
+      | [] -> Lwt.return db
+      | (file, typ)::t ->
+        match typ with
+        | `Value -> (* we need real files ending with .pub *)
+          if (String.ends_with ~suffix:".pub" file) then begin
+            (* we can sub 4 to the length as we know that the filename ends with ".pub" *)
+            let len = (String.length file) -4 in
+            let user = String.sub file 0 len in
+            SSHFS.get_disk_key disk file >>= fun key ->
+            add_key_of_string db user key >>= fun db ->
+            add_usernames db t
+          end
+          else
+            add_usernames db t
+        | _ ->
+          add_usernames db t
+    in
+    add_usernames db flist
 
   let rec sshfs_communication sshin sshout _ssherror prev_data working_table disk () =
     (* here we can have multiple messages in the queue *)
@@ -71,9 +102,9 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     Lwt.return_unit
 
   let serve priv_key flow addr disk =
-    let user = Key_gen.user () in
-    Log.info (fun f -> f "[%s] initiating connexion with user %s\n%!" addr user);
-    user_db disk user >>= fun(users) ->
+    Log.info (fun f -> f "[%s] initiating connexion\n%!" addr);
+    user_db disk >>= fun users ->
+    Log.info (fun f -> f "We have %d possible users" (List.length users));
     let server, msgs = Awa.Server.make priv_key users in
     AWA_MIRAGE.spawn_server server msgs flow (exec addr disk) >>= fun _t ->
     Log.info (fun f -> f "[%s] finished\n%!" addr);

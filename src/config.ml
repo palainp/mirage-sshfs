@@ -1,8 +1,12 @@
 open Mirage
 
 let user =
-  let doc = Key.Arg.info ~doc:"The username to connect with." ["user"] in
+  let doc = Key.Arg.info ~doc:"The default username." ["user"] in
   Key.(create "user" Arg.(opt string "mirage" doc))
+
+let key =
+  let doc = Key.Arg.info ~doc:"The pubkey for the default username." ["key"] in
+  Key.(create "key" Arg.(opt string "xxx" doc)) (* the default key means that it is impossible to connect with this user *)
 
 let port =
   let doc = Key.Arg.info ~doc:"The port number to listen for connections." ["port"] in
@@ -33,6 +37,7 @@ let main =
     ~keys:[
       Key.v port;
       Key.v user;
+      Key.v key;
       Key.v seed;
       Key.v blockkey;
     ]

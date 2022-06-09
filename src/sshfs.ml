@@ -30,6 +30,9 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     CCM.connect ~key:(Cstruct.of_hex blockkey) disk >>= fun disk ->
     FS.connect disk
 
+  let get_list_key disk =
+    FS.lsdir disk "/"
+
   let get_disk_key disk filename =
     FS.read disk filename
 
