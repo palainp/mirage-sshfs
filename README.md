@@ -21,8 +21,8 @@ ssh-keygen -t ed25519 -C mirage_sshfs -f username -N '' && \
 chmod 600 username && \
 opam install chamelon-unix -y && \
 dd if=/dev/zero of=disk.img bs=1M count=32 && \
-chamelon format disk.img 4096 && \
-chamelon write ./disk.img 4096 /username.pub "$(cat username.pub)"
+chamelon format disk.img 512 && \
+chamelon write ./disk.img 512 /username.pub "$(cat username.pub)"
 ```
 
 Any kind of filesystem should be ok to use as it will be seen on the client
@@ -30,7 +30,8 @@ side via the sshfs protocol. We just have to be able to add the first public
 key to connect against.
 
 ## Filesystem encryption layer
-If you want to use an enryption layer under the filesystem's structure, this
+If you want to use an enryption layer (currently mandatory, I'll work for getting
+this optional) under the filesystem's structure, this
 unikernel uses the AES-CCM encrypted [mirage-block-ccm][] storage. You may
 want to convert an non-encrypted image (as the one previously created) to an
 encrypted one with the following:
