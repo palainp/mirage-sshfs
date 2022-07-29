@@ -15,6 +15,8 @@
  *)
 
 open Lwt.Infix
+open Helpers
+open Sshfs_tag
 
 module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
@@ -156,18 +158,18 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     if (String.equal path "/") then (* permissions for / *)
       mtime root pathkey >>= fun time ->
       let payload = Cstruct.concat [
-      Helpers.uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-      Helpers.uint64_to_cs 0L ; (* size value *)
-      Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)
-      Helpers.uint32_to_cs (Int32.of_float time) ; (* atime *)
-      Helpers.uint32_to_cs (Int32.of_float time)  (* mtime *)
+      uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+      uint64_to_cs 0L ; (* size value *)
+      uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)
+      uint32_to_cs (Int32.of_float time) ; (* atime *)
+      uint32_to_cs (Int32.of_float time)  (* mtime *)
       ] in
-      Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
+      Lwt.return (SSH_FXP_ATTRS, payload)
 
     else (* path exists? and is a folder or a file? *)
       is_present root pathkey >>= function
       | false ->
-          Lwt.return (Sshfs_tag.SSH_FXP_STATUS, Helpers.uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 Sshfs_tag.SSH_FX_NO_SUCH_FILE))
+          Lwt.return (SSH_FXP_STATUS, uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE))
       | true ->
         mtime root pathkey >>= fun time ->
         is_file root pathkey >>= function
@@ -176,23 +178,23 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           read root path >>= fun data ->
           let data = Cstruct.of_string data in
           let payload = Cstruct.concat [
-          Helpers.uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-          Helpers.uint64_to_cs (Int64.of_int (Cstruct.length data)) ;
-          Helpers.uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)
-          Helpers.uint32_to_cs (Int32.of_float time) ; (* atime *)
-          Helpers.uint32_to_cs (Int32.of_float time)  (* mtime *)
+          uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          uint64_to_cs (Int64.of_int (Cstruct.length data)) ;
+          uint32_to_cs (Int32.of_int(32768+448+56+7)) ; (* perm: -rwxrwxrwx *)
+          uint32_to_cs (Int32.of_float time) ; (* atime *)
+          uint32_to_cs (Int32.of_float time)  (* mtime *)
           ] in
-          Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
+          Lwt.return (SSH_FXP_ATTRS, payload)
         | false -> (* This is a folder *)
           Log.debug (fun f -> f "%s is a folder\n%!" path);
           let payload = Cstruct.concat [
-          Helpers.uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-          Helpers.uint64_to_cs 10L ; (* !!FIXME!! size value *)
-          Helpers.uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)
-          Helpers.uint32_to_cs (Int32.of_float time) ; (* atime *)
-          Helpers.uint32_to_cs (Int32.of_float time)  (* mtime *)
+          uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+          uint64_to_cs 10L ; (* !!FIXME!! size value *)
+          uint32_to_cs (Int32.of_int(16384+448+56+7)) ; (* perm: drwxrwxrwx *)
+          uint32_to_cs (Int32.of_float time) ; (* atime *)
+          uint32_to_cs (Int32.of_float time)  (* mtime *)
           ] in
-          Lwt.return (Sshfs_tag.SSH_FXP_ATTRS, payload)
+          Lwt.return (SSH_FXP_ATTRS, payload)
 
   (**
    pre: path is the key for [data(0..data_length-1)]
