@@ -135,10 +135,6 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     create_file_if pflags root pathkey >>= fun () ->
     touch_file_if pflags root pathkey
 
-  let read root path =
-    let pathkey = Mirage_kv.Key.v path in
-    Chamelon.get root pathkey >>+= fun data -> Lwt.return data
-
   let mtime root pathkey =
     Chamelon.last_modified root pathkey >>+= fun (d, ps) ->
     match Ptime.Span.of_d_ps (d, ps) with
@@ -147,10 +143,14 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
       | Some span ->
         Lwt.return (Ptime.Span.to_float_s span)
 
-  let size root pathkey =
+  let size_key root pathkey =
     Chamelon.size root pathkey >>= function
     | Error _ -> Lwt.return 0
     | Ok s -> Lwt.return s
+
+  let size root path =
+    let pathkey = Mirage_kv.Key.v path in
+    size_key root pathkey
 
   (* permissions:
    * p:4096, d:16384, -:32768
@@ -162,7 +162,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
     let pathkey = Mirage_kv.Key.v path in
     if (String.equal path "/") then (* permissions for / *)
       mtime root pathkey >>= fun time ->
-      size root pathkey >>= fun s ->
+      size_key root pathkey >>= fun s ->
       let payload = Cstruct.concat [
       uint32_to_cs 5l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
       uint64_to_cs (Int64.of_int s) ; (* size value *)
@@ -181,7 +181,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
         is_file root pathkey >>= function
         | true -> (* This is a file *)
           Log.debug (fun f -> f "%s is a file\n%!" path);
-          size root pathkey >>= fun s ->
+          size_key root pathkey >>= fun s ->
           let payload = Cstruct.concat [
           uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
           uint64_to_cs (Int64.of_int s) ;
@@ -192,7 +192,7 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           Lwt.return (SSH_FXP_ATTRS, payload)
         | false -> (* This is a folder *)
           Log.debug (fun f -> f "%s is a folder\n%!" path);
-          size root pathkey >>= fun s ->
+          size_key root pathkey >>= fun s ->
           let payload = Cstruct.concat [
           uint32_to_cs 13l ; (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + SSH_FILEXFER_ATTR_ACMODTIME(8) *)
           uint64_to_cs (Int64.of_int s) ;
@@ -202,6 +202,29 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           ] in
           Lwt.return (SSH_FXP_ATTRS, payload)
 
+  let read root path ~offset ~length =
+    let pathkey = Mirage_kv.Key.v path in
+    size_key root pathkey >>= fun s ->
+    (* Chamelon returns an error is the requested length is sup to the real size of the file *)
+    Chamelon.get_partial root pathkey ~offset ~length:(min length s) >>= begin function
+    | Error _ -> Lwt.return ""
+    | Ok data -> Lwt.return data
+    end
+
+  let get_before root pathkey len max_size =
+    (* Chamelon returns an error is the requested length is 0 or sup to the real size of the file *)
+    Chamelon.get_partial root pathkey ~offset:0 ~length:(min len max_size) >>= function
+    | Error _ -> Lwt.return ""
+    | Ok data -> Lwt.return data
+
+  let get_after root pathkey offset max_size =
+    if (offset < max_size) then begin
+      Chamelon.get_partial root pathkey ~offset ~length:(max_size - offset) >>= function
+      | Error _ -> Lwt.return ""
+      | Ok data -> Lwt.return data
+    end else
+      Lwt.return ""
+
   (**
    pre: path is the key for [data(0..data_length-1)]
    post: path is the key for
@@ -209,28 +232,18 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
        Q: take care when data_length < offset
        Q: take care when offset < 0
    *)
-  let write root path offset newdata_length newdata =
+  let write root path ~offset newdata_length newdata =
     let pathkey = Mirage_kv.Key.v path in
-    Chamelon.get root pathkey >>= begin function
-    | Error _ -> Lwt.return_unit
-    | Ok data ->
-       let data = Cstruct.of_string data in
-       let data_length = Cstruct.length data in
+    size_key root pathkey >>= fun s ->
+    get_before root pathkey offset s >>= fun before ->
+    let before = Cstruct.of_string before in
+    get_after root pathkey (offset+newdata_length) s >>= fun after ->
+    let after = Cstruct.of_string after in
 
-       let offset_before = max 0 (Int64.to_int offset) in
-       let len_before = min data_length offset_before in
-       let before = Cstruct.sub data 0 len_before in
-
-       let offset_after = min ((Int64.to_int offset)+newdata_length) data_length in
-       let len_after = max 0 (data_length-offset_after) in
-       let after = Cstruct.sub data offset_after len_after in
-
-       let newdata = Cstruct.concat [before; newdata; after] in
-       (* FIXME: is there a way to update a key ? *)
-       Chamelon.remove root pathkey >>*= fun () ->
-       Chamelon.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
-       Lwt.return_unit
-    end
+    let newdata = Cstruct.concat [before; newdata; after] in
+    Chamelon.remove root pathkey >>*= fun () ->
+    Chamelon.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
+    Lwt.return_unit
 
   (* TODO: deal remove directories... *)
   let remove root path =
