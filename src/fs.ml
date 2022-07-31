@@ -202,28 +202,33 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           ] in
           Lwt.return (SSH_FXP_ATTRS, payload)
 
-  let read root path ~offset ~length =
-    let pathkey = Mirage_kv.Key.v path in
+  let read_key root pathkey ~offset ~length =
     size_key root pathkey >>= fun s ->
-    (* Chamelon returns an error is the requested length is sup to the real size of the file *)
-    Chamelon.get_partial root pathkey ~offset ~length:(min length s) >>= begin function
-    | Error _ -> Lwt.return ""
-    | Ok data -> Lwt.return data
+    if (length = 0 || offset >= s) then
+      Lwt.return (Ok "")
+    else begin
+      Chamelon.get_partial root pathkey ~offset ~length:(min length (s-offset)) >>= begin function
+      | Error e -> Lwt.return (Error e)
+      | Ok data -> Lwt.return (Ok data)
+      end
     end
 
-  let get_before root pathkey len max_size =
-    (* Chamelon returns an error is the requested length is 0 or sup to the real size of the file *)
-    Chamelon.get_partial root pathkey ~offset:0 ~length:(min len max_size) >>= function
-    | Error _ -> Lwt.return ""
-    | Ok data -> Lwt.return data
+  let read root path ~offset ~length =
+    let pathkey = Mirage_kv.Key.v path in
+    read_key root pathkey ~offset ~length
 
-  let get_after root pathkey offset max_size =
-    if (offset < max_size) then begin
-      Chamelon.get_partial root pathkey ~offset ~length:(max_size - offset) >>= function
-      | Error _ -> Lwt.return ""
-      | Ok data -> Lwt.return data
-    end else
-      Lwt.return ""
+  (* get data before index *)
+  let get_before root pathkey index =
+    read_key root pathkey ~offset:0 ~length:index >>= function
+    | Error _ -> Lwt.return Cstruct.empty
+    | Ok data -> Lwt.return (Cstruct.of_string data)
+
+  (* get data after index *)
+  let get_after root pathkey index =
+    size_key root pathkey >>= fun s ->
+    read_key root pathkey ~offset:index ~length:s >>= function
+    | Error _ -> Lwt.return Cstruct.empty
+    | Ok data -> Lwt.return (Cstruct.of_string data)
 
   (**
    pre: path is the key for [data(0..data_length-1)]
@@ -234,11 +239,8 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
    *)
   let write root path ~offset newdata_length newdata =
     let pathkey = Mirage_kv.Key.v path in
-    size_key root pathkey >>= fun s ->
-    get_before root pathkey offset s >>= fun before ->
-    let before = Cstruct.of_string before in
-    get_after root pathkey (offset+newdata_length) s >>= fun after ->
-    let after = Cstruct.of_string after in
+    get_before root pathkey offset >>= fun before ->
+    get_after root pathkey (offset+newdata_length) >>= fun after ->
 
     let newdata = Cstruct.concat [before; newdata; after] in
     Chamelon.remove root pathkey >>*= fun () ->

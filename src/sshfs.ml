@@ -36,7 +36,9 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
   let get_disk_key disk filename =
     FS.size disk filename >>= fun s ->
-    FS.read disk filename ~offset:0 ~length:s
+    FS.read disk filename ~offset:0 ~length:s >>= function
+    | Error _ -> Lwt.return ""
+    | Ok data -> Lwt.return data
 
   let payload_of_string s =
     Cstruct.concat [uint32_to_cs (Int32.of_int(String.length s)) ;
@@ -182,12 +184,12 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
 
         FS.path_of_handle root handle >>= fun path ->
         Log.debug (fun f -> f "[SSH_FXP_READ %ld] for '%s' @%d (%d)\n%!" id path offset length);
-        FS.read root path ~offset ~length >>= fun data ->
-        if (String.equal data "") then begin
+        FS.read root path ~offset ~length >>= begin function
+        | Error _ ->
           let payload = uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 SSH_FX_EOF) in
           sshout (to_client SSH_FXP_STATUS (Cstruct.concat [uint32_to_cs id ; payload ]) )
           >>= fun () -> Lwt.return working_table
-        end else begin
+        | Ok data ->
           let payload = Cstruct.of_string data in
           sshout (to_client SSH_FXP_DATA (Cstruct.concat [uint32_to_cs id ;
             uint32_to_cs (Int32.of_int(Cstruct.length payload));
