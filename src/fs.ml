@@ -203,15 +203,9 @@ module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
           Lwt.return (SSH_FXP_ATTRS, payload)
 
   let read_key root pathkey ~offset ~length =
-    size_key root pathkey >>= fun s ->
-    if (length = 0 || offset >= s) then
-      Lwt.return (Ok "")
-    else begin
-      Chamelon.get_partial root pathkey ~offset ~length:(min length (s-offset)) >>= begin function
-      | Error e -> Lwt.return (Error e)
-      | Ok data -> Lwt.return (Ok data)
-      end
-    end
+   Chamelon.get_partial root pathkey ~offset ~length >>= function
+     | Error e -> Lwt.return (Error e)
+     | Ok data -> Lwt.return (Ok data)
 
   let read root path ~offset ~length =
     let pathkey = Mirage_kv.Key.v path in

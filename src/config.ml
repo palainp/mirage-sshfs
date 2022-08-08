@@ -26,7 +26,7 @@ let main =
       package ~min:"6.0.0" "cstruct";
       package ~min:"0.1.0" "awa-mirage";
       package "mirage-block-ccm";
-      package ~sublibs:["kv"] ~min:"0.1.1" "chamelon";
+      package ~sublibs:["kv"] ~min:"0.1.2" "chamelon";
       package "ethernet";
       package "io-page";
       package ~min:"6.0.0" "mirage-protocols";
