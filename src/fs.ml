@@ -224,15 +224,10 @@ module Make (KV: Mirage_kv.RW) (P: Mirage_clock.PCLOCK) = struct
        Q: take care when data_length < offset
        Q: take care when offset < 0
    *)
-  let write root path ~offset newdata_length newdata =
+  let write root path ~offset _newdata_length newdata =
     let pathkey = Mirage_kv.Key.v path in
-    get_before root pathkey offset >>= fun before ->
-    get_after root pathkey (offset+newdata_length) >>= fun after ->
-
-    let newdata = Cstruct.concat [before; newdata; after] in
-    KV.remove root pathkey >>*= fun () ->
-    KV.set root pathkey (Cstruct.to_string newdata) >>*= fun () ->
-    Lwt.return_unit
+    let data = Cstruct.to_string newdata in
+    KV.set_partial root pathkey ~offset data
 
   (* TODO: deal remove directories... *)
   let remove root path =
@@ -241,13 +236,9 @@ module Make (KV: Mirage_kv.RW) (P: Mirage_clock.PCLOCK) = struct
 
   (* TODO: deal rename directories... *)
   let rename root oldpath newpath =
-    let oldpathkey = Mirage_kv.Key.v oldpath in
-    let newpathkey = Mirage_kv.Key.v newpath in
-    remove_if_present root newpathkey >>= fun() ->
-    KV.get root oldpathkey >>+= fun data ->
-    KV.set root newpathkey data >>*= fun () ->
-    KV.remove root oldpathkey >>*= fun () ->
-    Lwt.return_unit
+    let source = Mirage_kv.Key.v oldpath in
+    let dest = Mirage_kv.Key.v newpath in
+    KV.rename root ~source ~dest
 
   (* TODO: do not shows up the . file as it's only used to create directories *)
   let lsdir root path =
