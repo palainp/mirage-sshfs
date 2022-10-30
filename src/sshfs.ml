@@ -17,13 +17,12 @@
 open Lwt.Infix
 open Helpers
 
-module Make (B: Mirage_block.S) (P: Mirage_clock.PCLOCK) = struct
+module Make (KV: Mirage_kv.RW) (P: Mirage_clock.PCLOCK) = struct
 
   let log_src = Logs.Src.create "sshfs_protocol" ~doc:"Protocol dealer for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  module CCM = Block_ccm.Make(B)
-  module FS = Fs.Make(CCM)(P)
+  module FS = Fs.Make(KV)(P)
 
   let fail fmt = Fmt.kstr Lwt.fail_with fmt
 

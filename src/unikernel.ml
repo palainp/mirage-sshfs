@@ -16,14 +16,13 @@
 
 open Lwt.Infix
 
-module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (P: Mirage_clock.PCLOCK) (S: Tcpip.Stack.V4V6) (B: Mirage_block.S) = struct
+module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (P: Mirage_clock.PCLOCK) (S: Tcpip.Stack.V4V6) (KV: Mirage_kv.RW) = struct
 
   let log_src = Logs.Src.create "sshfs_server" ~doc:"Server for sshfs"
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  module F = S.TCP
-  module AWA_MIRAGE = Awa_mirage.Make(F)(T)(M)
-  module SSHFS = Sshfs.Make(B)(P)
+  module AWA = Awa_mirage.Make(S.TCP)(T)(M)
+  module SSHFS = Sshfs.Make(KV)(P)
 
 
   let add_key_of_string db user key =
@@ -106,32 +105,24 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
     user_db disk >>= fun users ->
     Log.info (fun f -> f "We have %d possible users" (List.length users));
     let server, msgs = Awa.Server.make priv_key users in
-    AWA_MIRAGE.spawn_server server msgs flow (exec addr disk) >>= fun _t ->
+    AWA.spawn_server server msgs flow (exec addr disk) >>= fun _t ->
     Log.info (fun f -> f "[%s] finished\n%!" addr);
     Lwt.return_unit
 
   let start _random _time _mclock _pclock stack disk =
-    let blockkey = Key_gen.blockkey () in
-    SSHFS.connect disk blockkey >>= function
-    | Error _ ->
-        Log.info (fun f -> f "Unable to read the disk");
-        Lwt.return_unit
+    let seed = Key_gen.seed () in
+    let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string seed) (module Fortuna)) in
+    let (ec_priv,_) = Mirage_crypto_ec.Ed25519.generate ~g () in
+    let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in
+    let port = Key_gen.port () in
+    S.TCP.listen (S.tcp stack) ~port (fun flow ->
+        let dst, _ (*dst_port*) = S.TCP.dst flow in
+        let addr = Ipaddr.to_string dst in
+        serve priv_key flow addr disk >>= fun () ->
+        S.TCP.close flow
+      );
 
-    | Ok disk ->
-        let seed = Key_gen.seed () in
-        let g = Mirage_crypto_rng.(create ~seed:(Cstruct.of_string seed) (module Fortuna)) in
-        let (ec_priv,_) = Mirage_crypto_ec.Ed25519.generate ~g () in
-        let priv_key = Awa.Hostkey.Ed25519_priv (ec_priv) in
-
-        let port = Key_gen.port () in
-        S.TCP.listen (S.tcp stack) ~port (fun flow ->
-            let dst, _ (*dst_port*) = S.TCP.dst flow in
-            let addr = Ipaddr.to_string dst in
-            serve priv_key flow addr disk >>= fun () ->
-            S.TCP.close flow
-          );
-
-        Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" port);
-        S.listen stack
+    Log.info (fun f -> f "SSHFS server waiting connections on port %d\n%!" port);
+    S.listen stack
 
 end

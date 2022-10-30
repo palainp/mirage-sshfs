@@ -40,7 +40,7 @@ opam install mirage-block-ccm -y && \
 ccmblock enc --in=disk.img --out=encrypted.img --key=1234567890ABCDEF1234567890ABCDEF
 ```
 
-In this case, you must add the `--blockkey 1234567890ABCDEF1234567890ABCDEF` in
+In this case, you must add the `--aes-ccm-key 1234567890ABCDEF1234567890ABCDEF` in
 the following commands and use the encrypted image file.
 
 ## Running Unix "chrooted" SSHFS
