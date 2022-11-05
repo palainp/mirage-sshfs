@@ -26,6 +26,7 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
 
 
   let add_key_of_string db user key =
+    Log.debug(fun f -> f "Trying to add user `%s` with pubkey (`%s`)..." user key);
     let sshkey = Awa.Wire.pubkey_of_openssh (Cstruct.of_string key ) in
     if (Result.is_ok sshkey) then begin
       Log.debug (fun f -> f "Adding user `%s` with pubkey (`%s`)" user key);
