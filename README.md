@@ -7,18 +7,38 @@ Warning: WIP!
 This unikernel can be seen as a "super chrooted" SSHFS mount point or be
 used as a VM that provides a common disk for other VMs.
 
+## Public/Private key access
+As we use ssh for communication, we first need to have a public/private key pair.
+We will later add the public key to the disk image file (the pubkey must be
+present at the root of the filesystem or must be given to the unikernel through
+the `--user` and `--key` options).
+```
+ssh-keygen -t ed25519 -C mirage_sshfs -f username -N '' && \
+chmod 600 username
+```
+Note that the empty passphrase is not mandatory (it's currently not supported by
+[awa-ssh]() but the passphrase will be supported by the sshfs client).
+
 ## Filesystem creation
-In order to use the unikernel, you must create a disk file that will be
+This unikernel can be used with persistent (but that's not mandatory if you
+want to simply share some files) storage layer.
+
+### Not persistent storage layer
+If you don't want to have persistent data, you can modify `src/config.ml` to
+comment out the section talking about `chamelon` and `aes-ccm`, and simply use
+```
+let my_fs = kv_rw_mem ()
+```
+
+In this case, you must add the `--key 'ssh-ed25519\ AAAA....xyz\ mirage_sshfs` for
+starting the server and defining the `--user` public key.
+
+### Persistent storage layer
+If you prefer to save data persistently, you must create a disk file that will be
 shared with SSHFS. It currently uses a [chamelon][] Ocaml implementation of
 [littlefs][].
 
-In order to add the public key for the user, we first need to create a
-public/private key pair and add the public ket to the disk image file (the
-pubkey must be present at the root of the filesystem and must be
-`username.pub`).
 ```
-ssh-keygen -t ed25519 -C mirage_sshfs -f username -N '' && \
-chmod 600 username && \
 opam install chamelon-unix -y && \
 dd if=/dev/zero of=disk.img bs=1M count=32 && \
 chamelon format disk.img 512 && \
@@ -26,12 +46,12 @@ chamelon write ./disk.img 512 /username.pub "$(cat username.pub)"
 ```
 
 Any kind of filesystem should be ok to use as it will be seen on the client
-side via the sshfs protocol. We just have to be able to add the first public
-key to connect against.
+side via the sshfs protocol. In the previous instructions, we also add the public
+key at the root of the filesystem in order to be able to connect without having to
+use the `--key` option.
 
 ## Filesystem encryption layer
-If you want to use an enryption layer (currently mandatory, I'll work for getting
-this optional) under the filesystem's structure, this
+If you want to use an enryption layer under the filesystem's structure, this
 unikernel uses the AES-CCM encrypted [mirage-block-ccm][] storage. You may
 want to convert an non-encrypted image (as the one previously created) to an
 encrypted one with the following:
@@ -40,8 +60,8 @@ opam install mirage-block-ccm -y && \
 ccmblock enc --in=disk.img --out=encrypted.img --key=1234567890ABCDEF1234567890ABCDEF
 ```
 
-In this case, you must add the `--blockkey 1234567890ABCDEF1234567890ABCDEF` in
-the following commands and use the encrypted image file.
+In this case, you must add the `--aes-ccm-key 1234567890ABCDEF1234567890ABCDEF` in
+the commands and use the encrypted image file.
 
 ## Running Unix "chrooted" SSHFS
 ```
@@ -51,9 +71,10 @@ dune build && \
 ./src/dist/mirage_sshfs --port 22022 --user username --seed 111213
 ```
 
-The server gives access to the content of the `disk.img` file with the user
-`username` and the key is in `disk.img/username.pub`. The default values for
-port and username are `18022` and `mirage`.
+The server gives access to the content of the mirage-kv store with the user
+`username` and the key (at the root level `disk.img/username.pub` or as defined on
+the command line with option `--key`). The default values for port and
+username are `18022` and `mirage`.
 
 ## Running Hvt SSHFS VM
 ```
@@ -130,6 +151,7 @@ cat /path/mount/username.pub
 See `etc/README.md`.
 
 [mirage-sshfs]: https://github.com/palainp/mirage-sshfs
+[awa-ssh]: https://github.com/mirage/awa-ssh
 [chamelon]: https://github.com/yomimono/chamelon/
 [littlefs]: https://github.com/littlefs-project/littlefs
 [mirage-block-ccm]: https://github.com/sg2342/mirage-block-ccm
