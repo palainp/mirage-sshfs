@@ -52,7 +52,7 @@ let my_fs = kv_rw_mem ()
 
 let aes_ccm_key =
   let doc = Key.Arg.info [ "aes-ccm-key" ] ~doc:"The key of the block device (hex formatted)" in
-  Key.(create "aes-ccm-key" Arg.(opt string "1234567890ABCDEF1234567890ABCDEF" doc))
+  Key.(create "aes-ccm-key" Arg.(required string doc))
 
 let program_block_size =
   let doc = Key.Arg.info [ "program_block_size" ] ~doc:"The program block size of the formatted fs layer (if using chamelon)" in
@@ -60,7 +60,7 @@ let program_block_size =
 
 (* is_xen = Qubes target, is_solo5 = Spt or Hvt target, else = Unix target *)
 let block = Key.(if_impl is_xen (block_of_file "private") (if_impl is_solo5 (block_of_file "storage") (block_of_file "encrypted.img")))
-let encrypted_block = ccm aes_ccm_key block
+let encrypted_block = ccm_block aes_ccm_key block
 let my_fs = chamelon ~program_block_size encrypted_block
 
 (* *** *)
