@@ -41,8 +41,7 @@ shared with SSHFS. It currently uses a [chamelon][] Ocaml implementation of
 ```
 opam install chamelon-unix -y && \
 dd if=/dev/zero of=disk.img bs=1M count=32 && \
-chamelon format disk.img 512 && \
-chamelon write ./disk.img 512 /username.pub "$(cat username.pub)"
+chamelon format disk.img 512
 ```
 
 Any kind of filesystem should be ok to use as it will be seen on the client
@@ -63,6 +62,38 @@ ccmblock enc --in=disk.img --out=encrypted.img --key=1234567890ABCDEF1234567890A
 In this case, you must add the `--aes-ccm-key 1234567890ABCDEF1234567890ABCDEF` in
 the commands and use the encrypted image file.
 
+## The User/Key database
+You can specify users and public keys with any one of the following methods. The user
+database is constructed in such a way that a user account cannot be redefined. So
+there is a priority in taking users into account:
+- command line option,
+- then `*.pub` files at the root level of the KV store,
+- then `authorized_keys` at the root level of the KV store.
+
+Of course you can add users and public keys when the unikernel is alive and you may
+only need one of the following method to add your first user (in particular when using
+`kv_mem` backend for storage).
+
+### As a command line option
+The first way is to use the `--user` and `--key` command line option. The easiest way
+to do that is the following:
+```
+./src/dist/mirage_sshfs --user username --key "$(cat username.pub | sed 's/ /\\ /g')"
+```
+
+### With public key files at the root of the KV store
+You can add any public key file at the root level of the KV store, for example with
+chamelon you can do this:
+```
+chamelon write ./disk.img 512 /username.pub "$(cat username.pub)"
+```
+
+### With an authorized_keys file at the root of the KV store
+You can add an `authorized_keys` file at the root level as you can do with an ssh server:
+```
+chamelon write ./disk.img 512 /authorized_keys "$(cat ~/.ssh/authorized_keys)"
+```
+
 ## Running Unix "chrooted" SSHFS
 ```
 mirage configure -t unix -f src/config.ml && \
@@ -72,9 +103,10 @@ dune build && \
 ```
 
 The server gives access to the content of the mirage-kv store with the user
-`username` and the key (at the root level `disk.img/username.pub` or as defined on
-the command line with option `--key`). The default values for port and
-username are `18022` and `mirage`.
+`username` and a key associated with that user (as defined on the command line
+with option `--key` or at the root level `disk.img/username.pub` or in
+`disk.img/authorized_keys`). The default values for port and username are
+`18022` and `mirage`, the default key is not a valid publickey and cannot be used.
 
 ## Running Hvt SSHFS VM
 ```
