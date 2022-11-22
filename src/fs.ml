@@ -204,19 +204,6 @@ module Make (KV: Mirage_kv.RW) (P: Mirage_clock.PCLOCK) = struct
     let pathkey = Mirage_kv.Key.v path in
     read_key root pathkey ~offset ~length
 
-  (* get data before index *)
-  let get_before root pathkey index =
-    read_key root pathkey ~offset:0 ~length:index >>= function
-    | Error _ -> Lwt.return Cstruct.empty
-    | Ok data -> Lwt.return (Cstruct.of_string data)
-
-  (* get data after index *)
-  let get_after root pathkey index =
-    size_key root pathkey >>= fun s ->
-    read_key root pathkey ~offset:index ~length:s >>= function
-    | Error _ -> Lwt.return Cstruct.empty
-    | Ok data -> Lwt.return (Cstruct.of_string data)
-
   (**
    pre: path is the key for [data(0..data_length-1)]
    post: path is the key for
