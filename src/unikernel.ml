@@ -24,26 +24,35 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
   module AWA = Awa_mirage.Make(S.TCP)(T)(M)
   module SSHFS = Sshfs.Make(KV)(P)
 
-
+  (* this funtion adds the user/key in the authorized user/key db.
+     The server will consider only the first occurence, not adding any duplicate *)
   let add_key_of_string db user key =
-    Log.debug(fun f -> f "Trying to add user `%s` with pubkey (`%s`)..." user key);
-    let sshkey = Awa.Wire.pubkey_of_openssh (Cstruct.of_string key ) in
-    if (Result.is_ok sshkey) then begin
-      Log.debug (fun f -> f "Adding user `%s` with pubkey (`%s`)" user key);
-      let db = List.cons (Awa.Auth.make_user user [ (Result.get_ok sshkey) ] ) db in
+    match Awa.Auth.lookup_user user db with
+    | Some _ ->
+      Log.debug(fun f -> f "Trying to add user `%s` but is already present..." user);
       Lwt.return db
-    end else Lwt.return db
+    | None ->
+      Log.debug(fun f -> f "Trying to add user `%s` with pubkey (`%s`)..." user key);
+      let sshkey = Awa.Wire.pubkey_of_openssh (Cstruct.of_string key ) in
+      if (Result.is_ok sshkey) then begin
+        Log.debug (fun f -> f "Adding user `%s` with pubkey (`%s`)" user key);
+        let db = List.cons (Awa.Auth.make_user user [ (Result.get_ok sshkey) ] ) db in
+        Lwt.return db
+      end else Lwt.return db
 
+  (* this populates the db of authorized users/keys *)
   let user_db disk =
     let db = [] in
 
+    (* first we add the user/key taken from command line, this way the command line option
+       will have the higher priority *)
     let default_user = Key_gen.user () in
     let default_key = Key_gen.key () in
     add_key_of_string db default_user default_key >>= fun db ->
 
-    (* then we scan the key directory (which may contains other files than .pub files) *)
+    (* then we scan the root directory for .pub files *)
     SSHFS.get_list_key disk >>= fun flist ->
-    let rec add_usernames db l =
+    let rec add_pubkey_files db l =
       match l with
       | [] -> Lwt.return db
       | (file, typ)::t ->
@@ -55,14 +64,34 @@ module Main (_: Mirage_random.S) (T : Mirage_time.S) (M : Mirage_clock.MCLOCK) (
             let user = String.sub file 0 len in
             SSHFS.get_disk_key disk file >>= fun key ->
             add_key_of_string db user key >>= fun db ->
-            add_usernames db t
+            add_pubkey_files db t
           end
           else
-            add_usernames db t
+            add_pubkey_files db t
         | _ ->
-          add_usernames db t
+          add_pubkey_files db t
     in
-    add_usernames db flist
+    add_pubkey_files db flist >>= fun db ->
+
+    (* then we scan the authorized_keys file. Warning the name is set in the stone here *)
+    SSHFS.get_disk_key disk "authorized_keys" >>= fun keys ->
+    let rec add_authorized_keys db l =
+      match l with
+      | [] -> Lwt.return db
+      | k::t ->
+        (* format should be "type key information" (with type like rsa, ed, etc),
+           key the hex string, and information any comment to the pubkey, here used as
+           a user *)
+        let toklist = String.split_on_char ' ' k in
+        if (List.length toklist >= 3) then
+          let user = List.nth toklist 2 in
+          add_key_of_string db user k >>= fun db ->
+          add_authorized_keys db t
+        else
+          add_authorized_keys db t
+    in
+    let keys = String.split_on_char '\n' keys in
+    add_authorized_keys db keys
 
   let rec sshfs_communication sshin sshout _ssherror prev_data working_table disk () =
     (* here we can have multiple messages in the queue *)
