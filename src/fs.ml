@@ -133,15 +133,14 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
     touch_file_if pflags root pathkey
 
   let mtime root pathkey =
-    KV.last_modified root pathkey >>+= fun (d, ps) ->
-    match Ptime.Span.of_d_ps (d, ps) with
-    | None -> Lwt.return 0.0
-    | Some span -> Lwt.return (Ptime.Span.to_float_s span)
+    KV.last_modified root pathkey >>+= fun t ->
+    let span = Ptime.to_span t in
+    Lwt.return (Ptime.Span.to_float_s span)
 
   let size_key root pathkey =
     KV.size root pathkey >>= function
     | Error _ -> Lwt.return 0
-    | Ok s -> Lwt.return s
+    | Ok s -> Lwt.return (Optint.Int63.to_int s)
 
   let size root path =
     let pathkey = Mirage_kv.Key.v path in
@@ -251,7 +250,10 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
   (* TODO: do not shows up the . file as it's only used to create directories *)
   let lsdir root path =
     let pathkey = Mirage_kv.Key.v path in
-    KV.list root pathkey >>+= fun res -> Lwt.return res
+    KV.list root pathkey >>+= fun res ->
+    (* change keys into strings *)
+    let f = fun (k,t) -> (Mirage_kv.Key.to_string k,t) in
+    Lwt.return (List.map f res)
 
   let mkdir root path =
     (* it seems that we cannot create empty directory, so I try to add a empty . file which must

@@ -29,7 +29,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
 
   let get_disk_key disk filename =
     FS.size disk filename >>= fun s ->
-    FS.read disk filename ~offset:0 ~length:s >>= function
+    FS.read disk filename ~offset:(Optint.Int63.of_int 0) ~length:s >>= function
     | Error _ -> Lwt.return ""
     | Ok data -> Lwt.return data
 
@@ -161,13 +161,13 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
                      (Cstruct.concat [ uint32_to_cs id; payload ]))
                 >>= fun () -> Lwt.return working_table
             | head :: tail ->
+                let head = match head with str, _ -> str in
                 (* if we still have something to give *)
-                let headstr = match head with str, _ -> str in
                 FS.path_of_handle root handle >>= fun path ->
                 let name =
                   match path with
-                  | "/" -> headstr (* for /  we just give the file name *)
-                  | _ -> String.concat "/" [ path; headstr ]
+                  | "/" -> head (* for /  we just give the file name *)
+                  | _ -> String.concat "/" [ path; head ]
                   (* for not / we give the full pathname *)
                 in
                 Log.debug (fun f ->
@@ -179,7 +179,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
                     [
                       uint32_to_cs 1l;
                       (* count the number of names returned *)
-                      payload_of_string headstr;
+                      payload_of_string head;
                       (* short-name *)
                       payload_of_string
                         "1234567890123123456781234567812345678123456789012";
@@ -245,7 +245,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
         FS.path_of_handle root handle >>= fun path ->
         Log.debug (fun f ->
             f "[SSH_FXP_READ %ld] for '%s' @%d (%d)\n%!" id path offset length);
-        FS.read root path ~offset ~length >>= function
+        FS.read root path ~offset:(Optint.Int63.of_int offset) ~length >>= function
         | Error _ ->
             let payload =
               uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 SSH_FX_EOF)
@@ -424,7 +424,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
               newdata_length);
         (* FIXME: we always reply with status ok... Deal with possible returned errors *)
         let offset = Int64.to_int offset in
-        FS.write root path ~offset newdata_length newdata >>= fun _ ->
+        FS.write root path ~offset:(Optint.Int63.of_int offset) newdata_length newdata >>= fun _ ->
         let payload =
           uint32_to_cs (Sshfs_tag.sshfs_errcode_to_uint32 SSH_FX_OK)
         in
