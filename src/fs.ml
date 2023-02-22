@@ -133,9 +133,11 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
     touch_file_if pflags root pathkey
 
   let mtime root pathkey =
-    KV.last_modified root pathkey >>+= fun t ->
-    let span = Ptime.to_span t in
-    Lwt.return (Ptime.Span.to_float_s span)
+    KV.last_modified root pathkey >>= function
+    | Error _ -> Lwt.return 0.0
+    | Ok s ->
+      let s = Ptime.to_span s in
+      Lwt.return (Ptime.Span.to_float_s s)
 
   let size_key root pathkey =
     KV.size root pathkey >>= function
@@ -154,27 +156,6 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
    *)
   let permission root path =
     let pathkey = Mirage_kv.Key.v path in
-    if String.equal path "/" then
-      (* permissions for / *)
-      mtime root pathkey >>= fun time ->
-      size_key root pathkey >>= fun s ->
-      let payload =
-        Cstruct.concat
-          [
-            uint32_to_cs 5l;
-            (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
-            uint64_to_cs (Int64.of_int s);
-            (* size value *)
-            uint32_to_cs (Int32.of_int (16384 + 448 + 56 + 7));
-            (* perm: drwxrwxrwx *)
-            uint32_to_cs (Int32.of_float time);
-            (* atime *)
-            uint32_to_cs (Int32.of_float time) (* mtime *);
-          ]
-      in
-      Lwt.return (SSH_FXP_ATTRS, payload)
-    else
-      (* path exists? and is a folder or a file? *)
       is_present root pathkey >>= function
       | false ->
           Lwt.return
@@ -182,10 +163,10 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
               uint32_to_cs (sshfs_errcode_to_uint32 SSH_FX_NO_SUCH_FILE) )
       | true -> (
           mtime root pathkey >>= fun time ->
+          size_key root pathkey >>= fun s ->
           is_file root pathkey >>= function
           | true ->
               (* This is a file *)
-              size_key root pathkey >>= fun s ->
               let payload =
                 Cstruct.concat
                   [
@@ -202,7 +183,6 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
               Lwt.return (SSH_FXP_ATTRS, payload)
           | false ->
               (* This is a folder *)
-              size_key root pathkey >>= fun s ->
               let payload =
                 Cstruct.concat
                   [
@@ -252,7 +232,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
     let pathkey = Mirage_kv.Key.v path in
     KV.list root pathkey >>+= fun res ->
     (* change keys into strings *)
-    let f = fun (k,t) -> (Mirage_kv.Key.to_string k,t) in
+    let f = fun (k,t) -> (Mirage_kv.Key.basename k,t) in
     Lwt.return (List.map f res)
 
   let mkdir root path =

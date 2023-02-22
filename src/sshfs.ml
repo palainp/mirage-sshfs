@@ -111,8 +111,8 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
               (to_client reply_type
                  (Cstruct.concat [ uint32_to_cs id; payload ]))
             >>= fun () ->
-            FS.lsdir root path >>= fun content_list ->
-            Hashtbl.add working_table handle content_list;
+            FS.lsdir root path >>= fun names ->
+            Hashtbl.add working_table handle names;
             Lwt.return working_table
         | _ ->
             (* if the handle is already opened -> error *)
@@ -160,16 +160,9 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
                   (to_client SSH_FXP_STATUS
                      (Cstruct.concat [ uint32_to_cs id; payload ]))
                 >>= fun () -> Lwt.return working_table
-            | head :: tail ->
-                let head = match head with str, _ -> str in
+            | (head, _) :: tail ->
                 (* if we still have something to give *)
-                FS.path_of_handle root handle >>= fun path ->
-                let name =
-                  match path with
-                  | "/" -> head (* for /  we just give the file name *)
-                  | _ -> String.concat "/" [ path; head ]
-                  (* for not / we give the full pathname *)
-                in
+                FS.path_of_handle root handle >>= fun name ->
                 Log.debug (fun f ->
                     f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle
                       name);
