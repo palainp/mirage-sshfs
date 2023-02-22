@@ -156,6 +156,27 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
    *)
   let permission root path =
     let pathkey = Mirage_kv.Key.v path in
+    if String.equal path "/" then
+      (* permissions for / *)
+      mtime root pathkey >>= fun time ->
+      size_key root pathkey >>= fun s ->
+      let payload =
+        Cstruct.concat
+          [
+            uint32_to_cs 5l;
+            (* SSH_FILEXFER_ATTR_SIZE(1) + ~SSH_FILEXFER_ATTR_UIDGID(2) + SSH_FILEXFER_ATTR_PERMISSIONS(4) + ~SSH_FILEXFER_ATTR_ACMODTIME(8) *)
+            uint64_to_cs (Int64.of_int s);
+            (* size value *)
+            uint32_to_cs (Int32.of_int (16384 + 448 + 56 + 7));
+            (* perm: drwxrwxrwx *)
+            uint32_to_cs (Int32.of_float time);
+            (* atime *)
+            uint32_to_cs (Int32.of_float time) (* mtime *);
+          ]
+      in
+      Lwt.return (SSH_FXP_ATTRS, payload)
+    else
+      (* path exists? and is a folder or a file? *)
       is_present root pathkey >>= function
       | false ->
           Lwt.return
