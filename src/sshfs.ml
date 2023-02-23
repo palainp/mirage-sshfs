@@ -80,7 +80,6 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
         sshout
           (to_client reply_type (Cstruct.concat [ uint32_to_cs id; payload ]))
         >>= fun () ->
-        Log.debug (fun f -> f "[return from sshout %ld]\n%!" id);
         Lwt.return working_table
     (* 6.8 Retrieving File Attributes *)
     | SSH_FXP_FSTAT ->
@@ -161,18 +160,19 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
                      (Cstruct.concat [ uint32_to_cs id; payload ]))
                 >>= fun () -> Lwt.return working_table
             | (head, _) :: tail ->
-                (* if we still have something to give *)
-                FS.path_of_handle root handle >>= fun name ->
+                (* if we still have something to give: it's a Mirage_kv.Key.t *)
+                let name = Mirage_kv.Key.basename head in
+                let path = Mirage_kv.Key.to_string head in
                 Log.debug (fun f ->
                     f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle
                       name);
-                FS.permission root name >>= fun (_, stats) ->
+                FS.permission root path >>= fun (_, stats) ->
                 let payload =
                   Cstruct.concat
                     [
                       uint32_to_cs 1l;
                       (* count the number of names returned *)
-                      payload_of_string head;
+                      payload_of_string name;
                       (* short-name *)
                       payload_of_string
                         "1234567890123123456781234567812345678123456789012";

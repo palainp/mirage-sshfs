@@ -252,9 +252,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
   let lsdir root path =
     let pathkey = Mirage_kv.Key.v path in
     KV.list root pathkey >>+= fun res ->
-    (* change keys into strings *)
-    let f = fun (k,t) -> (Mirage_kv.Key.basename k,t) in
-    Lwt.return (List.map f res)
+    Lwt.return res
 
   let mkdir root path =
     (* it seems that we cannot create empty directory, so I try to add a empty . file which must

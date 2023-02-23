@@ -64,9 +64,10 @@ struct
     let rec add_pubkey_files db l =
       match l with
       | [] -> Lwt.return db
-      | (file, typ) :: t -> (
+      | (key, typ) :: t -> (
           match typ with
           | `Value ->
+              let file = Mirage_kv.Key.basename key in
               (* we need real files ending with .pub *)
               if String.ends_with ~suffix:".pub" file then
                 (* we can sub 4 to the length as we know that the filename ends with ".pub" *)
