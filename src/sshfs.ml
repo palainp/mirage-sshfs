@@ -110,6 +110,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
               (to_client reply_type
                  (Cstruct.concat [ uint32_to_cs id; payload ]))
             >>= fun () ->
+            (* Puts every item as Mirage_kv.Key.t in the hash table *)
             FS.lsdir root path >>= fun names ->
             Hashtbl.add working_table handle names;
             Lwt.return working_table
@@ -148,7 +149,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
             let remaining_list = Option.get remaining_list in
             match remaining_list with
             | [] ->
-                (* if we exahuted the list of files/folder inside the requested handle *)
+                (* if we exhausted the list of files/folder inside the requested handle *)
                 Log.debug (fun f ->
                     f "[SSH_FXP_READDIR %ld] for '%s' no more content\n%!" id
                       handle);
@@ -161,18 +162,17 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
                 >>= fun () -> Lwt.return working_table
             | (head, _) :: tail ->
                 (* if we still have something to give: it's a Mirage_kv.Key.t *)
-                let name = Mirage_kv.Key.basename head in
-                let path = Mirage_kv.Key.to_string head in
+                let path = Mirage_kv.Key.basename head in
                 Log.debug (fun f ->
                     f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle
-                      name);
+                      path);
                 FS.permission root path >>= fun (_, stats) ->
                 let payload =
                   Cstruct.concat
                     [
                       uint32_to_cs 1l;
                       (* count the number of names returned *)
-                      payload_of_string name;
+                      payload_of_string path;
                       (* short-name *)
                       payload_of_string
                         "1234567890123123456781234567812345678123456789012";

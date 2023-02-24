@@ -58,11 +58,13 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
 
   (* for now paths and handles are id but we can change that here *)
   let path_to_handle _ path =
-    let handle = path in
+    let handle = String.map (fun c -> if c=='/' then '\\' else c) path in
+    Logs.info(fun f -> f "path to handle %s -> %s" path handle);
     Lwt.return handle
 
   let path_of_handle _ handle =
-    let path = handle in
+    let path =  String.map (fun c -> if c=='\\' then '/' else c) handle in
+    Logs.info(fun f -> f "handle to path %s -> %s" handle path);
     Lwt.return path
 
   (* silently discard the error if the key is absent *)
@@ -235,7 +237,9 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
   let write root path ~offset _newdata_length newdata =
     let pathkey = Mirage_kv.Key.v path in
     let data = Cstruct.to_string newdata in
-    KV.set_partial root pathkey ~offset data
+    KV.set_partial root pathkey ~offset data >>= function
+    | Error e -> Lwt.return (Error e)
+    | Ok () -> Lwt.return (Ok ())
 
   (* TODO: deal remove directories... *)
   let remove root path =
@@ -248,11 +252,12 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
     let dest = Mirage_kv.Key.v newpath in
     KV.rename root ~source ~dest
 
-  (* TODO: do not shows up the . file as it's only used to create directories *)
+  (* list the path but eventually exclude . as it's only used to create directories *)
   let lsdir root path =
     let pathkey = Mirage_kv.Key.v path in
     KV.list root pathkey >>+= fun res ->
-    Lwt.return res
+    let names = List.filter (fun (k, _) -> not (String.equal (Mirage_kv.Key.basename k) ".")) res in
+    Lwt.return names
 
   let mkdir root path =
     (* it seems that we cannot create empty directory, so I try to add a empty . file which must
