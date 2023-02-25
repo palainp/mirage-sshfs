@@ -143,7 +143,8 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
 
   let size_key root pathkey =
     KV.size root pathkey >>= function
-    | Error _ -> Lwt.return 0
+    | Error `Not_found k -> Log.err (fun f -> f "size: '%s' isn't found" (Mirage_kv.Key.to_string k)); Lwt.return 0
+    | Error _ -> Log.err (fun f -> f "connot get size for '%s'" (Mirage_kv.Key.to_string pathkey)); Lwt.return 0
     | Ok s -> Lwt.return (Optint.Int63.to_int s)
 
   let size root path =
@@ -256,7 +257,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
   let lsdir root path =
     let pathkey = Mirage_kv.Key.v path in
     KV.list root pathkey >>+= fun res ->
-    let names = List.filter (fun (k, _) -> not (String.equal (Mirage_kv.Key.basename k) ".")) res in
+    let names = List.filter (fun (k, _) -> (Mirage_kv.Key.basename k) <> ".") res in
     Lwt.return names
 
   let mkdir root path =

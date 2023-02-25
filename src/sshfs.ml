@@ -162,17 +162,18 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
                 >>= fun () -> Lwt.return working_table
             | (head, _) :: tail ->
                 (* if we still have something to give: it's a Mirage_kv.Key.t *)
-                let path = Mirage_kv.Key.basename head in
+                let name = Mirage_kv.Key.basename head in
+                let path = Mirage_kv.Key.to_string head in
                 Log.debug (fun f ->
                     f "[SSH_FXP_READDIR %ld] for '%s' giving '%s'\n%!" id handle
-                      path);
+                      name);
                 FS.permission root path >>= fun (_, stats) ->
                 let payload =
                   Cstruct.concat
                     [
                       uint32_to_cs 1l;
                       (* count the number of names returned *)
-                      payload_of_string path;
+                      payload_of_string name;
                       (* short-name *)
                       payload_of_string
                         "1234567890123123456781234567812345678123456789012";
