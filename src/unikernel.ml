@@ -98,10 +98,10 @@ struct
     let keys = String.split_on_char '\n' keys in
     add_authorized_keys db keys
 
-  let rec sshfs_communication sshin sshout _ssherror prev_data working_table
+  let rec sshfs_communication sshin sshout ssherror prev_data working_table
       disk () =
     (* here we can have multiple messages in the queue *)
-    let rec consume_messages input sshout _ssherror working_table disk () =
+    let rec consume_messages input sshout ssherror working_table disk () =
       (* if the message is empty *)
       if Cstruct.length input == 0 then Lwt.return (Cstruct.empty, working_table)
       else
@@ -113,36 +113,40 @@ struct
         else
           (* in the other cases we can deal with it *)
           let data = Cstruct.sub input 4 len in
-          SSHFS.reply data sshout _ssherror working_table
+          SSHFS.reply data sshout ssherror working_table
             (* internal structure, list open handles and associated datas *)
             disk ()
           >>= fun new_table ->
           consume_messages
             (Cstruct.sub input (len + 4) (Cstruct.length input - len - 4))
-            sshout _ssherror new_table disk ()
+            sshout ssherror new_table disk ()
     in
     sshin () >>= function
     | `Eof -> Lwt.return_unit
     | `Data input ->
         consume_messages
           (Cstruct.append prev_data input)
-          sshout _ssherror working_table disk ()
+          sshout ssherror working_table disk ()
         >>= fun (remaining_data, new_table) ->
-        sshfs_communication sshin sshout _ssherror remaining_data new_table disk
+        sshfs_communication sshin sshout ssherror remaining_data new_table disk
           ()
 
-  let exec addr disk cmd sshin sshout _ssherror =
-    Log.info (fun f -> f "[%s] executing `%s`\n%!" addr cmd);
-    (match cmd with
-    | "sftp" ->
-        sshfs_communication sshin sshout _ssherror Cstruct.empty
-          (Hashtbl.create 10) disk ()
+  let exec addr disk req =
+    match req with
+    | AWA.Channel {cmd; ic; oc; ec; } ->
+      Log.info (fun f -> f "[%s] executing `%s`\n%!" addr cmd);
+      (match cmd with
+      | "sftp" ->
+          sshfs_communication ic oc ec Cstruct.empty
+            (Hashtbl.create 10) disk ()
+      | _ ->
+          Log.warn (fun f -> f "*** Subsystem %s is not implemented\n%!" cmd);
+          Lwt.return_unit)
+      >>= fun () ->
+      Log.info (fun f -> f "[%s] execution of `%s` finished\n%!" addr cmd);
+      Lwt.return_unit
     | _ ->
-        Log.warn (fun f -> f "*** Subsystem %s is not implemented\n%!" cmd);
-        Lwt.return_unit)
-    >>= fun () ->
-    Log.info (fun f -> f "[%s] execution of `%s` finished\n%!" addr cmd);
-    Lwt.return_unit
+      Lwt.return_unit
 
   let serve priv_key flow addr disk =
     Log.info (fun f -> f "[%s] initiating connexion\n%!" addr);

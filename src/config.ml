@@ -28,7 +28,7 @@ let main =
     ~packages:
       [
         package ~min:"6.0.0" "cstruct";
-        package ~min:"0.1.0" "awa-mirage";
+        package ~min:"0.2.0" "awa-mirage";
         package "ethernet";
         package "io-page";
         package ~min:"6.0.1" "mirage-kv";
@@ -52,8 +52,8 @@ let stack = generic_stackv4v6 default_network
 
 (* If you prefer to have a persistent storage layer you can use the following (chamelon as
       the filesystem, and ccm for encryption layer for your disk)
-*)
-(*let aes_ccm_key =
+
+let aes_ccm_key =
   let doc =
     Key.Arg.info [ "aes-ccm-key" ]
       ~doc:"The key of the block device (hex formatted)"
