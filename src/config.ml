@@ -48,7 +48,7 @@ let stack = generic_stackv4v6 default_network
 (* The following is using mirage-kv-mem as the disk layer, the data shared with sshfs won't
       resist to shutdown but this scenario can be convenient for a simple sharing method... *)
 
-(* let my_fs = kv_rw_mem () *)
+let my_fs = kv_rw_mem ()
 
 (* If you prefer to have a persistent storage layer you can use the following (chamelon as
       the filesystem, and ccm for encryption layer for your disk)
@@ -60,7 +60,7 @@ let aes_ccm_key =
   in
   Key.(create "aes-ccm-key" Arg.(required string doc))
 *)
-let program_block_size =
+(*let program_block_size =
   let doc =
     Key.Arg.info [ "program_block_size" ]
       ~doc:
@@ -79,7 +79,7 @@ let block =
 let my_fs = chamelon ~program_block_size encrypted_block*)
 let my_fs = chamelon ~program_block_size block
 
-
+*)
 (* *** *)
 
 let () =
