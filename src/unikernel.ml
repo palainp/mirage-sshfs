@@ -59,6 +59,7 @@ struct
     let default_user = Key_gen.user () in
     let default_key = Key_gen.key () in
     add_key_of_string db default_user default_key >>= fun db ->
+    Log.debug (fun f -> f "default user %s added with default key %s" default_user default_key);
     (* then we scan the root directory for .pub files *)
     SSHFS.get_list_key disk >>= fun flist ->
     let rec add_pubkey_files db l =
@@ -140,7 +141,7 @@ struct
           sshfs_communication ic oc ec Cstruct.empty
             (Hashtbl.create 10) disk ()
       | _ ->
-          Log.warn (fun f -> f "*** Subsystem %s is not implemented\n%!" cmd);
+          Log.info (fun f -> f "*** Subsystem %s is not implemented\n%!" cmd);
           Lwt.return_unit)
       >>= fun () ->
       Log.info (fun f -> f "[%s] execution of `%s` finished\n%!" addr cmd);

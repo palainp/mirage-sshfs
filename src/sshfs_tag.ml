@@ -59,6 +59,7 @@ type sshfs_packtype =
   | SSH_FXP_REMOVE
   | SSH_FXP_MKDIR
   | SSH_FXP_RMDIR
+  | SSH_FXP_STAT
   | SSH_FXP_RENAME
   | SSH_FXP_STATUS
   | SSH_FXP_HANDLE
@@ -83,6 +84,7 @@ let sshfs_packtype_of_uint8 = function
   | 13 -> SSH_FXP_REMOVE
   | 14 -> SSH_FXP_MKDIR
   | 15 -> SSH_FXP_RMDIR
+  | 17 -> SSH_FXP_STAT
   | 18 -> SSH_FXP_RENAME
   | 101 -> SSH_FXP_STATUS
   | 102 -> SSH_FXP_HANDLE
@@ -107,6 +109,7 @@ let sshfs_packtype_to_uint8 = function
   | SSH_FXP_REMOVE -> 13
   | SSH_FXP_MKDIR -> 14
   | SSH_FXP_RMDIR -> 15
+  | SSH_FXP_STAT -> 17
   | SSH_FXP_RENAME -> 18
   | SSH_FXP_STATUS -> 101
   | SSH_FXP_HANDLE -> 102

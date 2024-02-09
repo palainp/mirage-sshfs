@@ -72,10 +72,11 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
              (uint32_to_cs (min 3l (uint32_of_cs data))))
         >>= fun () -> Lwt.return working_table
     (* 6.8 Retrieving File Attributes *)
-    | SSH_FXP_LSTAT ->
+    | SSH_FXP_STAT
+    | SSH_FXP_LSTAT -> (* So far we don't bother with symlinks... *)
         let path_length = Int32.to_int (uint32_of_cs (Cstruct.sub data 4 4)) in
         let path = Cstruct.to_string (Cstruct.sub data 8 path_length) in
-        Log.debug (fun f -> f "[SSH_FXP_LSTAT %ld] for '%s'\n%!" id path);
+        Log.debug (fun f -> f "[SSH_FXP_?STAT %ld] for '%s'\n%!" id path);
         FS.permission root path >>= fun (reply_type, payload) ->
         sshout
           (to_client reply_type (Cstruct.concat [ uint32_to_cs id; payload ]))
@@ -428,7 +429,7 @@ module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
         >>= fun () -> Lwt.return working_table
     (* Not implemented yet :) *)
     | _ ->
-        Log.debug (fun f -> f "[UNKNOWN %ld]\n%!" id);
+        Log.info (fun f -> f "[UNKNOWN id %ld (not implemented?)]\n%!" id);
         Cstruct.hexdump message;
         (let payload =
            Cstruct.concat
