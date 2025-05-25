@@ -178,7 +178,7 @@ struct
 
   let start stack disk =
     let g =
-      Mirage_crypto_rng.create (module Mirage_crypto_rng.Fortuna)
+      Mirage_crypto_rng.create  ~seed:"123456" (module Mirage_crypto_rng.Fortuna)
     in
     let ec_priv, _ = Mirage_crypto_ec.Ed25519.generate ~g () in
     let priv_key = Awa.Hostkey.Ed25519_priv ec_priv in
