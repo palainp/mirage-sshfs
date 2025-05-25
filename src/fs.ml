@@ -18,7 +18,7 @@ open Lwt.Infix
 open Helpers
 open Sshfs_tag
 
-module Make (KV : Mirage_kv.RW) (P : Mirage_clock.PCLOCK) = struct
+module Make (KV : Mirage_kv.RW) = struct
   let log_src = Logs.Src.create "sshfs_fs" ~doc:"Helper fs functions"
 
   module Log = (val Logs.src_log log_src : Logs.LOG)
